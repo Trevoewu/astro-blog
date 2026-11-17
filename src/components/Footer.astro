@@ -1,65 +1,37 @@
 ---
-import { BASE_CONFIG, FOOTER_CONFIG } from "../config";
+import { LINKS } from '@/consts';
 ---
 
 <footer>
-  <span class="footer-copyright">
-    © {BASE_CONFIG.create_time.split("-")[0]} Built with ❤️ by {BASE_CONFIG.author}.
+  <span>
+    [↗]: {LINKS.map(({ label, href }) => {
+      const isExternal = href.startsWith('http');
+      return (
+        <><a target={isExternal ? '_blank' : undefined} rel={isExternal ? 'me noopener' : undefined} href={href}>{label}</a>, </>
+      );
+    })}<a target='_blank' href='/rss.xml'>RSS</a>
   </span>
-
-  <nav class="footer-nav">
-    {
-      FOOTER_CONFIG.link.map((link) => (
-        <a
-          href={link.url}
-          target={link.url.startsWith("http") ? "_blank" : undefined}
-          rel={link.url.startsWith("http") ? "noopener" : undefined}
-        >
-          {link.name}
-        </a>
-      ))
-    }
-  </nav>
 </footer>
 
 <style>
   footer {
-    margin: 0;
-    gap: 0.5rem;
-    padding: 1rem 0 1.5rem 0;
-    font-family: serif, "Times New Roman" ;
-    border-top: 1px solid var(--line-border-color);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-top: 1rem;
-    flex-wrap: wrap;
+    position: relative;
+
+    padding-top: 1em;
+    margin-top: 3em;
   }
 
-  .footer-copyright {
-    font-size: 12px;
-    color: var(--text-description-color);
-  }
-  .footer-copyright a {
-    color: var(--text-description-color);
-    text-decoration: none;
+  span {
+    color: var(--theme-sub-text);
   }
 
-  .footer-nav {
-    display: flex;
-    align-items: center;
-  }
+  footer::before {
+    content: '';
+    position: absolute;
 
-  .footer-nav a {
-    font-size: 12px;
-    color: var(--text-description-color);
-    text-decoration: none;
-  }
+    top: 0;
+    width: 25%;
 
-  /* 右侧各项之间用 / 衔接 */
-  .footer-nav > *:not(:first-child)::before {
-    content: "/";
-    margin: 0 0.5rem;
-    color: var(--text-description-color);
+    border-top: 1px solid var(--theme-sub-text);
   }
 </style>

@@ -1,17 +1,14 @@
-// @ts-check
-import { defineConfig } from 'astro/config';
-import sitemap from '@astrojs/sitemap';
-import icon from 'astro-icon';
-import expressiveCode from 'astro-expressive-code';
+import { defineConfig } from "astro/config";
 
-// https://astro.build/config
+import sitemap from "@astrojs/sitemap";
+import mdx from "@astrojs/mdx";
+
+import { SITE_URL } from "./src/consts";
+
 export default defineConfig({
-  site: 'https://trevor.ccwu.cc',
-  integrations: [sitemap(), icon(), expressiveCode({
-    themes: ['min-dark', 'rose-pine-dawn'],
-    themeCssSelector: (theme) => `[data-theme='${theme.type}']`})],
+  site: SITE_URL,
+  integrations: [sitemap(), mdx()],
   markdown: {
-      remarkPlugins: ['remark-directive', 'remark-breaks', 'remark-math', 'remark-blackout', 'remark-alert'],
-      rehypePlugins: ['rehype-mathjax'],
+    shikiConfig: { theme: "css-variables" }
   }
 });
