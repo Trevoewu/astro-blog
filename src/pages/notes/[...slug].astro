@@ -12,10 +12,10 @@ export async function getStaticPaths() {
 }
 
 const { note, prev, next } = Astro.props;
-const { Content } = await render(note);
+const { Content, headings } = await render(note);
 const ogImage = /[^\x00-\x7F]/.test(note.data.title) ? '/og/index.png' : `/og/${note.id}.png`;
 ---
 
-<NoteLayout frontmatter={note.data} image={ogImage} {prev} {next}>
+<NoteLayout frontmatter={note.data} image={ogImage} {headings} {prev} {next}>
   <Content />
 </NoteLayout>
