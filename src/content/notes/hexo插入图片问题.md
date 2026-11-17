@@ -4,16 +4,6 @@ pubDate: 2023-04-21 11:46:44
 published: true
 ---
 
-import DitheredImage from '@/components/DitheredImage.astro';
-import img1Light from './assets/hexo-img-1-light.webp';
-import img1Dark from './assets/hexo-img-1-dark.webp';
-import img2Light from './assets/hexo-img-2-light.webp';
-import img2Dark from './assets/hexo-img-2-dark.webp';
-import img3Light from './assets/hexo-img-3-light.webp';
-import img3Dark from './assets/hexo-img-3-dark.webp';
-import img4Light from './assets/hexo-img-4-light.webp';
-import img4Dark from './assets/hexo-img-4-dark.webp';
-
 昨天刚搭建完博客, 发现直接写markdown, hexo 生成后图片全部都没法显示了, 毕竟图片都在本地, 以绝对路径的方式存储的, markdown的路径的hexo的路径不匹配. 
 
 
@@ -44,15 +34,9 @@ marked:
 
   也就是这样
 
-<figure>
-  <DitheredImage light={img1Light} dark={img1Dark} alt="image-20230421120557507" />
-</figure>
+![image-20230421120557507](./assets/hexo-img-1.png)
 
-但是呢, 执行`hexo g`生成的时候, hexo会把sourec目录下的_posts文件的转化为成html, 并保存在pubilc对应日期的路径中,
-
-<figure>
-  <DitheredImage light={img2Light} dark={img2Dark} alt="image-20230421121112744" />
-</figure>
+但是呢, 执行`hexo g`生成的时候, hexo会把sourec目录下的_posts文件的转化为成html, 并保存在pubilc对应日期的路径中,![image-20230421121112744](./assets/hexo-img-2.png)
 
 可以看到, 此时index中的图片路径和markdown的图片路径是冲突的. 
 
@@ -134,9 +118,7 @@ function  handAMark(src){
 
 完美!
 
-<figure>
-  <DitheredImage light={img3Light} dark={img3Dark} alt="image-20230421124001298" />
-</figure>
+![image-20230421124001298](./assets/hexo-img-3.png)
 
 这样, 我们在Typora上写文章, 完全不用担心插入图片问题, 而且文章的图片也会有序的存放, 方面日后的管理. 
 
@@ -146,6 +128,4 @@ function  handAMark(src){
 
 这太棒了, 不是吗? 
 
-<figure>
-  <DitheredImage light={img4Light} dark={img4Dark} alt="image-20230421124655253" />
-</figure>
+![image-20230421124655253](./assets/hexo-img-4.png)

@@ -3,7 +3,6 @@
     "name": "Charloré's Blog",
     "description": "We are all in the gutter, but some of us are looking at the stars.",
     "url": "https://charlore.cn",
-    "avatar": "/links/charlore-light.webp",
-    "avatarDark": "/links/charlore-dark.webp"
+    "avatar": "https://assets.charlore.cn/images/charlore/profile-avatar.jpg"
   }
 ]

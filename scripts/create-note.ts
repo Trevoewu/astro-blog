@@ -22,13 +22,11 @@ slug: ${slug}
 published: false
 ---
 
-import DitheredImage from '@/components/DitheredImage.astro';
-
 ## Subtitle
 Content goes here...
 `;
 
-const filename = `${slug}.mdx`;
+const filename = `${slug}.md`;
 const filepath = join(scriptDir, '..', 'src', 'content', 'notes', filename);
 
 let exists = true;

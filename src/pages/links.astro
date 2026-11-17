@@ -2,7 +2,23 @@
 import BaseLayout from '@/layouts/BaseLayout.astro';
 import NoteHeader from '@/components/NoteHeader.astro';
 import DitheredImage from '@/components/DitheredImage.astro';
-import links from '@/data/links.json';
+import linksData from '@/data/links.json';
+import { ensureRemoteDitheredImage } from '@/lib/dither';
+
+const links = await Promise.all(
+  linksData.map(async (item) => {
+    const dithered = await ensureRemoteDitheredImage(item.avatar, {
+      keyPrefix: item.name,
+      squareSize: 96,
+      scale: 2,
+    });
+    return {
+      ...item,
+      avatarLight: dithered.lightSrc,
+      avatarDark: dithered.darkSrc,
+    };
+  }),
+);
 ---
 
 <BaseLayout headProps={{ title: 'Links', description: '友情链接与交换说明', image: '/og/links.png' }}>
@@ -14,7 +30,7 @@ import links from '@/data/links.json';
         <li class="link-item">
           <div class="link-avatar">
             <DitheredImage
-              light={item.avatar}
+              light={item.avatarLight}
               dark={item.avatarDark}
               alt={item.name}
               width={44}

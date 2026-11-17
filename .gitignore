@@ -16,6 +16,9 @@ pnpm-debug.log*
 .env
 .env.production
 
+# dithered image cache (generated on build/dev)
+public/_dithered/
+
 # macOS-specific files
 .DS_Store
 
