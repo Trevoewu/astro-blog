@@ -21,11 +21,11 @@ Zero-shot cross-domain slot filling extracts target-domain slot values from user
 **Advisor-guided extraction** combines both strengths through a simple division of labor:
 
 - The **advisor** is a frozen, black-box frontier LLM that reads the utterance and target schema to propose candidate spans for each slot. Because the advisor is never modified, it can be swapped freely across model providers.
-- The **extractor** is a compact, open-weight LLM fine-tuned on source-domain data to make the final prediction from the utterance, schema, and advisor notes.
+- The **extractor** is a compact, open-weight LLM fine-tuned on source-domain data to make the final prediction from the utterance, schema, and the advisor's suggestions.
 
 Across cross-domain benchmarks and advisor models, this hybrid setup consistently outperforms running either model alone.
 
-Yet this division of labor creates an unexpected puzzle. Given the same advisor notes, an untuned base model is **controllable but gullible**: it accepts nearly all valid advice, but it also copies most of the advisor's mistakes. Fine-tuning on source domains flips the extractor into a **robust yet stubborn** state. It learns to filter out noisy advice, but it also begins overriding the advisor—even when the advisor supplies the exact gold span on an unseen slot.
+Yet this division of labor creates an unexpected puzzle. Given the same advisor suggestions, an untuned base model is **controllable but gullible**: it accepts nearly all valid advice, but it also copies most of the advisor's mistakes. Fine-tuning on source domains flips the extractor into a **robust yet stubborn** state. It learns to filter out noisy advice, but it also begins overriding the advisor—even when the advisor supplies the exact gold span on an unseen slot.
 
 This stubbornness shows up in two concrete ways. On SNIPS, the tuned extractor repeatedly drops valid words that clash with source-domain habits. In *"add this track to my global funk"*, for instance, `"my"` is the gold value for `playlist_owner`. Other SNIPS domains leave `"my"` unlabeled, so source training teaches the extractor to ignore it. At test time, the untuned base model accepts the advisor's suggestion `playlist_owner="my"` every time, whereas the source-tuned extractor rejects it every time. On ATIS, a second pattern appears: instead of dropping a valid advisor span, the tuned extractor moves it from a specific role slot (such as `fromloc.city_name`) into a generic slot (such as `city_name`).
 
@@ -43,7 +43,7 @@ Why does source fine-tuning make an extractor override valid advice, and when ca
 
 #### Task and Slot Partition
 
-An open-weight extractor $E_\theta$ is trained on labeled source domains with slot vocabulary $\mathcal{S}_{\mathrm{src}}$ and evaluated on a held-out target domain with schema $S = (s_1, \dots, s_m)$. Each slot $s_j$ has a canonical name and a brief description. Target slots split into **source-seen slots** ($S_{\mathrm{seen}} = S \cap \mathcal{S}_{\mathrm{src}}$) and **unseen target slots** ($S_{\mathrm{unseen}} = S \setminus \mathcal{S}_{\mathrm{src}}$). Following the function-calling formulation of dialogue state tracking (Li et al., 2024), $E_\theta$ takes an utterance $x$ and schema $S$, and predicts $\hat{y} = (\hat{y}_1, \dots, \hat{y}_m)$, where each $\hat{y}_j$ is either verbatim substring(s) from $x$ or `NONE`.
+An open-weight extractor $E_\theta$ is trained on labeled source domains with slot vocabulary $\mathcal{S}_{\mathrm{src}}$ and evaluated on a held-out target domain with schema $S = (s_1, \dots, s_m)$. Each slot $s_j$ has a canonical name and a brief description. Target slots split into **source-seen slots** ($S_{\mathrm{seen}} = S \cap \mathcal{S}_{\mathrm{src}}$) and **unseen target slots** ($S_{\mathrm{unseen}} = S \setminus \mathcal{S}_{\mathrm{src}}$). Given an utterance $x$ and schema $S$, $E_\theta$ predicts $\hat{y} = (\hat{y}_1, \dots, \hat{y}_m)$, where each $\hat{y}_j$ is either verbatim substring(s) from $x$ or `NONE`.
 
 #### Benchmarks
 
@@ -54,35 +54,35 @@ We evaluate on two English benchmarks summarized in Table 2:
 
 #### Frozen Advisors and Source-Tuned Extractor
 
-At inference time, a frozen LLM *advisor* reads the utterance and schema and returns a structured array of slot-level notes. Each note pairs a stance tag (`keep`, `maybe`, or `drop`) with an optional candidate span from the utterance. To test the extractor without advice (`Solo` mode) under identical prompt framing, we supply neutral placeholders instead.
+At inference time, a frozen LLM *advisor* reads the utterance and target schema to propose candidate slot values, while the source-trained *extractor* $E_\theta$ conditions on those suggestions to produce the final prediction. To evaluate the extractor on its own (`Solo` mode), we run it without external advisor guidance.
 
-We evaluate four frozen advisors spanning multiple model families, with `DeepSeek-V4-Flash` serving as our primary advisor. Unless noted otherwise, the extractor $E_\theta$ is a `Qwen3-8B` model (Yang et al., 2025) fine-tuned on source-domain utterances via LoRA across three random seeds (full model versions, prompt schemas, and training hyperparameters are detailed in Appendix A).
+We evaluate four frozen advisors spanning multiple model families, with `DeepSeek-V4-Flash` serving as our primary advisor. Unless noted otherwise, the extractor $E_\theta$ is a `Qwen3-8B` model (Yang et al., 2025) fine-tuned on source-domain utterances via LoRA across three random seeds.
 
 ### 2.2 Separating Controllability from Noise Robustness
 
-For each slot $s_j$ with gold label $y_j$, let $\hat{y}^{\mathrm{solo}}_j$ and $\hat{y}_j$ denote the extractor's solo and advised predictions, and let $(\tau_j, c_j)$ denote the advisor note's stance tag ($\tau_j \in \{\texttt{keep}, \texttt{maybe}, \texttt{drop}\}$) and proposed span $c_j$. For any non-neutral note ($\tau_j \neq \texttt{maybe}$), we call it *correct* if it matches the gold label ($c_j = y_j$, or $\tau_j = \texttt{drop}$ when $y_j = \texttt{NONE}$), and *wrong* otherwise. This divides all non-neutral predictions into the four cases in Table 1.
+For each slot $s_j$ with gold label $y_j$, let $\hat{y}^{\mathrm{solo}}_j$ and $\hat{y}_j$ denote the extractor's solo and advised predictions, and let $a_j$ denote the advisor's non-abstaining suggestion for slot $s_j$ (either a proposed candidate span or `NONE`). We call a suggestion *correct* if it matches the gold label ($a_j = y_j$), and *wrong* otherwise. This divides advised predictions into the four cases in Table 1.
 
-| | **Note correct** | **Note wrong** |
+| | **Advice correct** | **Advice wrong** |
 | :--- | :--- | :--- |
 | **Solo correct** | Redundant agreement | Harmful disagreement ($\mathcal{R}$) |
-| **Solo wrong** | Note-critical ($\mathcal{C}_{\mathrm{conf}}$) | Both wrong |
+| **Solo wrong** | Advice-critical ($\mathcal{C}_{\mathrm{conf}}$) | Both wrong |
 
-*Table 1: Four-cell breakdown of advisor–extractor interaction on a single slot. Conflict controllability ($\mathcal{C}_{\mathrm{conf}}$) isolates the note-critical cell; strict noise robustness ($\mathcal{R}$) isolates the harmful-disagreement cell.*
+*Table 1: Four-cell breakdown of advisor–extractor interaction on a single slot. Conflict controllability ($\mathcal{C}_{\mathrm{conf}}$) isolates the advice-critical cell; strict noise robustness ($\mathcal{R}$) isolates the harmful-disagreement cell.*
 
 Adapting Li et al. (2022), we measure the two off-diagonal behaviors:
 
 $$
-\mathcal{C}_{\mathrm{conf}} = \Pr\bigl(\hat{y}_j = y_j \;\big|\; \hat{y}^{\mathrm{solo}}_j \neq y_j,\; \mathrm{note}_j \text{ is correct}\bigr) \tag{1}
+\mathcal{C}_{\mathrm{conf}} = \Pr\bigl(\hat{y}_j = y_j \;\big|\; \hat{y}^{\mathrm{solo}}_j \neq y_j,\; a_j = y_j\bigr) \tag{1}
 $$
 
 $$
-\mathcal{R} = \Pr\bigl(\hat{y}_j = y_j \;\big|\; \hat{y}^{\mathrm{solo}}_j = y_j,\; \mathrm{note}_j \text{ is wrong}\bigr) \tag{2}
+\mathcal{R} = \Pr\bigl(\hat{y}_j = y_j \;\big|\; \hat{y}^{\mathrm{solo}}_j = y_j,\; a_j \neq y_j\bigr) \tag{2}
 $$
 
 Two measurement choices keep stubbornness visible:
 
-1. **Isolating true conflicts from easy agreements.** Averaging over all correct notes mixes genuine conflicts with easy cases where the extractor already agrees with the advisor. On a 700-utterance SNIPS sample (`DeepSeek-V4-Flash`, seed 3407), 86.6% of all correct notes survive in the final output, which hides the fact that the extractor follows conflicting notes only 48.36% of the time on SNIPS validation.
-2. **Enforcing strict span robustness.** Equation (2) requires the extractor to keep the exact gold value $y_j$, not merely reject a bad suggestion. In our training-checkpoint and weight-scaling analyses, we compute $\mathcal{C}_{\mathrm{conf}}$ and $\mathcal{R}$ over notes proposing non-null spans and evaluate explicit `drop` notes separately, preventing empty rejections from inflating robustness.
+1. **Isolating true conflicts from easy agreements.** Averaging over all correct suggestions mixes genuine conflicts with easy cases where the extractor already agrees with the advisor. On a 700-utterance SNIPS sample (`DeepSeek-V4-Flash`, seed 3407), 86.6% of all correct suggestions survive in the final output, which hides the fact that the extractor follows conflicting suggestions only 48.36% of the time on SNIPS validation.
+2. **Enforcing strict span robustness.** Equation (2) requires the extractor to keep the exact gold value $y_j$, not merely reject a bad suggestion. In our training-checkpoint and weight-scaling analyses, we compute $\mathcal{C}_{\mathrm{conf}}$ and $\mathcal{R}$ over suggestions proposing candidate spans and evaluate absent-slot suggestions separately, preventing trivial empty agreements from inflating robustness.
 
 ### 2.3 Evaluation Regimes and Zero-Label Boundaries
 
@@ -101,43 +101,43 @@ Two measurement choices keep stubbornness visible:
 Because mixing target supervision into zero-shot evaluation blurs what unlabeled adaptation can actually achieve, we enforce a strict boundary across three regimes (Table 2):
 
 - **Strict zero-label regime (Sections 3–5).** Target-domain inputs consist strictly of slot schemas and unlabeled utterances. Recurring $(\mathrm{slot}, \mathrm{span})$ conflict clusters are discovered solely from disagreements between `Solo` and advisor outputs on unlabeled text: on SNIPS validation (500 utterances per fold), we retain span clusters with at least 15 pairs and slot clusters with at least 30 pairs; on ATIS, we split the 5,371 test utterances evenly into 2,685 unlabeled discovery utterances (retaining clusters with at least 81 pairs) and 2,686 disjoint evaluation utterances. No target gold labels ever enter cluster discovery, zero-label judge verification, or structural gating.
-- **Separating exploratory design from confirmatory validation.** Whenever an analysis or rule is informed by inspecting model errors, we validate it on an untouched split with locked evaluation criteria. Specifically, while our training-step sweep in Section 3 tracks checkpoints 100–2600 as a training-dynamics diagnostic, the structural rebinding gate designed on ATIS test errors is tested out-of-sample on 500 untouched ATIS validation utterances using freshly generated advisor notes.
+- **Separating exploratory design from confirmatory validation.** Whenever an analysis or rule is informed by inspecting model errors, we validate it on an untouched split with locked evaluation criteria. Specifically, while our training-step sweep in Section 3 tracks checkpoints 100–2600 as a training-dynamics diagnostic, the structural rebinding gate designed on ATIS test errors is tested out-of-sample on 500 untouched ATIS validation utterances using freshly generated advisor suggestions.
 - **Minimal-label verification vs. few-shot fine-tuning (Sections 6–7).** Target gold labels enter *only* when we test how much supervision is needed to break convention deadlocks: either 1–3 binary (`yes`/`no`) confirmations per recurring conflict cluster, or 80 fully annotated target utterances for few-shot fine-tuning.
 
 ---
 
 ## 3. The Stubbornness Paradox and What Does Not Explain It
 
-Given identical advisor notes, why does source fine-tuning turn a compliant base model into a stubborn extractor? Before examining training data priors, we establish the behavioral contrast between the base and fine-tuned models and rule out four intuitive explanations: late-stage overfitting, overly strong adapter weights at inference time, unfamiliarity with new slot names, and selective uncertainty routing.
+Given identical advisor suggestions, why does source fine-tuning turn a compliant base model into a stubborn extractor? Before examining training data priors, we establish the behavioral contrast between the base and fine-tuned models and rule out four intuitive explanations: late-stage overfitting, overly strong adapter weights at inference time, unfamiliarity with new slot names, and selective uncertainty routing.
 
 ### 3.1 Base Model vs. Source-Tuned Extractor
 
-| Dataset (Sample) | Model | Parse Fail | Strict F1 | Correct Kept | Wrong Removed | Wrong-Slot Copies / New FP |
+| Dataset (Sample) | Model | Format Fail | Strict F1 | Correct Kept | Wrong Removed | Wrong-Slot Copies / New FP |
 | :--- | :--- | ---: | ---: | ---: | ---: | ---: |
-| SNIPS (700 utts) | Base `B0` (Null) | 0.0% | 54.46 | — | — | — |
-| | Base `B1` (+V4-Flash) | 0.0% | 69.65 | 98.6% (1,298/1,316) | 7.5% (49/654) | 10 / 18 (55.6%) |
-| | `AASF-null` | 0.0% | 75.05 | — | — | — |
-| | `AASF` (+V4-Flash) | 0.0% | 79.39 | 86.6% (1,140/1,316) | 80.4% (526/654) | 22 / 80 (27.5%) |
-| ATIS (1,000 utts) | Base `B0` (Null) | 5.5% | 12.63 | — | — | — |
-| | Base `B1` (+V4-Flash) | 0.3% | 79.54 | 97.5% (2,859/2,931) | 24.6% (324/1,316) | 3 / 26 (11.5%) |
-| | `AASF` (+V4-Flash, 3-seed) | 0.0% | 64.90 | 79.4% (76.2%–82.3%) | 60.6% (58.0%–65.0%) | 88.2%–92.6% (953–1,119 / 1,080–1,208) |
+| SNIPS (700 utts) | Base (`Solo`) | 0.0% | 54.46 | — | — | — |
+| | Base (`+V4-Flash`) | 0.0% | 69.65 | 98.6% (1,298/1,316) | 7.5% (49/654) | 10 / 18 (55.6%) |
+| | Source-Tuned (`Solo`) | 0.0% | 75.05 | — | — | — |
+| | Source-Tuned (`+V4-Flash`) | 0.0% | 79.39 | 86.6% (1,140/1,316) | 80.4% (526/654) | 22 / 80 (27.5%) |
+| ATIS (1,000 utts) | Base (`Solo`) | 5.5% | 12.63 | — | — | — |
+| | Base (`+V4-Flash`) | 0.3% | 79.54 | 97.5% (2,859/2,931) | 24.6% (324/1,316) | 3 / 26 (11.5%) |
+| | Source-Tuned (`+V4-Flash`, 3-seed) | 0.0% | 64.90 | 79.4% (76.2%–82.3%) | 60.6% (58.0%–65.0%) | 88.2%–92.6% (953–1,119 / 1,080–1,208) |
 
-*Table 3: Untuned `Qwen3-8B` (`B0`/`B1`) vs. source-tuned `AASF` on frozen `DeepSeek-V4-Flash` notes. Base `B0` on ATIS exceeds the 5% parse-failure gate (55/1,000). Source fine-tuning flips the extractor from gullible (`B1`) to robust yet selectively stubborn, producing convention omission on SNIPS and schema-bias slot reassignment on ATIS.*
+*Table 3: Untuned `Qwen3-8B` vs. the source-tuned extractor on frozen `DeepSeek-V4-Flash` suggestions. On ATIS, the untuned base model without advice exceeds a 5% format-failure rate (55/1,000). Source fine-tuning flips the extractor from gullible to robust yet selectively stubborn, producing convention omission on SNIPS and schema-bias slot reassignment on ATIS.*
 
-Table 3 contrasts untuned `Qwen3-8B` against the source-tuned extractor on diagnostic samples from SNIPS (700 utterances) and ATIS (1,000 utterances) using identical `DeepSeek-V4-Flash` notes. The untuned base model is **controllable but gullible**: it preserves 98.6% of correct notes on SNIPS and 97.5% on ATIS, yet filters out only 7.5% and 24.6% of wrong notes, respectively. Moreover, without advisor notes (`B0`), the untuned model fails to produce valid JSON on 5.5% of ATIS utterances and reaches only 12.63 F1.
+Table 3 contrasts untuned `Qwen3-8B` against the source-tuned extractor on diagnostic samples from SNIPS (700 utterances) and ATIS (1,000 utterances) using identical `DeepSeek-V4-Flash` suggestions. The untuned base model is **controllable but gullible**: it preserves 98.6% of correct suggestions on SNIPS and 97.5% on ATIS, yet filters out only 7.5% and 24.6% of wrong suggestions, respectively. Moreover, without advisor guidance (`Solo`), the untuned model fails to produce valid structured output on 5.5% of ATIS utterances and reaches only 12.63 F1.
 
-Source fine-tuning eliminates formatting errors and shifts the extractor into a **robust yet stubborn** state. On SNIPS, fine-tuning lifts advised F1 to 79.39 and rejects 80.4% of wrong notes, but correct-note retention drops to 86.6%. On ATIS—where every slot is unseen—the tuned extractor still filters out 60.6% of wrong notes across seeds, yet strict F1 falls to 64.90, far below the untuned base model's 79.54.
+Source fine-tuning eliminates formatting errors and shifts the extractor into a **robust yet stubborn** state. On SNIPS, fine-tuning lifts advised F1 to 79.39 and rejects 80.4% of wrong suggestions, but correct-suggestion retention drops to 86.6%. On ATIS—where every slot is unseen—the tuned extractor still filters out 60.6% of wrong suggestions across seeds, yet strict F1 falls to 64.90, far below the untuned base model's 79.54.
 
 Inspecting the overridden predictions reveals that stubbornness takes two distinct structural forms:
 
 1. **Clustered convention omission (SNIPS):** When a target domain's annotation rules clash with source-domain habits, the tuned extractor suppresses valid advisor spans to `NONE`. Across all 32 occurrences of `playlist_owner="my"` in the SNIPS sample, the untuned base model accepts 32/32 (100%), whereas the source-tuned extractor accepts 0/32 (0%).
-2. **Schema-bias slot reassignment (ATIS):** Rather than dropping unfamiliar spans, the tuned extractor moves them to a different slot. On the ATIS sample, 88.2%–92.6% of new false positives across seeds copy a valid advisor span from a specific role-qualified slot into a generic fallback slot (such as moving `fromloc.city_name` into `city_name`). Across the full 5,371-utterance ATIS test set, where raw `V4-Flash` notes achieve 77.60 F1, the tuned extractor drops to 62.18–66.92 F1, with 91.6% of all lost entities (16,333/17,823 pooled) reappearing under another slot name.
+2. **Schema-bias slot reassignment (ATIS):** Rather than dropping unfamiliar spans, the tuned extractor moves them to a different slot. On the ATIS sample, 88.2%–92.6% of new false positives across seeds copy a valid advisor span from a specific role-qualified slot into a generic fallback slot (such as moving `fromloc.city_name` into `city_name`). Across the full 5,371-utterance ATIS test set, where raw `V4-Flash` predictions achieve 77.60 F1, the tuned extractor drops to 62.18–66.92 F1, with 91.6% of all lost entities (16,333/17,823 pooled) reappearing under another slot name.
 
 ### 3.2 Early Collapse During Fine-Tuning (Not Late Overfitting)
 
 ![Training-checkpoint trajectory on SNIPS target validation](./assets/controllability_trajectory_20261111.png)
 
-*Figure 1: Training-checkpoint trajectory on SNIPS target validation (seed 3407, 7 folds × 3 training advisors, span notes). Between steps 100 and 200, conflict controllability $\mathcal{C}_{\mathrm{conf}}$ collapses in parallel on both unseen (64.50% → 38.43%) and seen (66.82% → 46.24%) target slots, while strict noise robustness $\mathcal{R}$ climbs toward its plateau.*
+*Figure 1: Training-checkpoint trajectory on SNIPS target validation (seed 3407, 7 folds, candidate-span advice). Between steps 100 and 200, conflict controllability $\mathcal{C}_{\mathrm{conf}}$ collapses in parallel on both unseen (64.50% → 38.43%) and seen (66.82% → 46.24%) target slots, while strict noise robustness $\mathcal{R}$ climbs toward its plateau.*
 
 A natural first hypothesis is that stubbornness comes from training too long on source domains, so early stopping should avoid it. Figure 1 rules this out by tracking conflict controllability ($\mathcal{C}_{\mathrm{conf}}$) and strict noise robustness ($\mathcal{R}$) from step 100 to step 2600 across all 7 SNIPS folds. Between steps 100 and 200, $\mathcal{C}_{\mathrm{conf}}$ plunges from **65.27%** to **41.02%** and stays flat for the rest of training (averaging 41.52% across steps 200–2400, and 48.36% at validation-selected checkpoints). Meanwhile, strict noise robustness $\mathcal{R}$ is still climbing from **77.18%** at step 100 to **82.33%** at step 200 before reaching its **88.44%** plateau.
 
@@ -151,12 +151,12 @@ Three checks confirm that this early collapse is a genuine behavioral shift rath
 
 ![Linearly scaling the LoRA adapter weight lambda on SNIPS and ATIS](./assets/adapter_dial_20261111.png)
 
-*Figure 2: Linearly scaling the LoRA adapter weight $\lambda \in \{0.0, 0.25, 0.5, 0.75, 1.0\}$ on SNIPS (700 utts) and ATIS (1,000 utts), seed 3407. Stubbornness turns on sharply between $\lambda=0.25$ and $\lambda=0.5$ before wrong-note rejection $\mathcal{R}$ matures.*
+*Figure 2: Linearly scaling the LoRA adapter weight $\lambda \in \{0.0, 0.25, 0.5, 0.75, 1.0\}$ on SNIPS (700 utts) and ATIS (1,000 utts), seed 3407. Stubbornness turns on sharply between $\lambda=0.25$ and $\lambda=0.5$ before wrong-advice rejection $\mathcal{R}$ matures.*
 
 If early stopping cannot separate noise rejection from stubbornness, can we find a sweet spot at inference time by scaling down the LoRA adapter weight $\lambda \in \{0.0, 0.25, 0.5, 0.75, 1.0\}$?[^1] Figure 2 shows that across both benchmarks, stubbornness switches on sharply between $\lambda=0.25$ and $\lambda=0.5$, well before noise robustness matures:
 
 - **SNIPS (700 utterances):** As $\lambda$ increases from $0.0$ to $1.0$, fixed-span $\mathcal{C}_{\mathrm{conf}}$ falls from 96.30% to 49.38% while strict $\mathcal{R}$ climbs from 7.40% to 89.00%. Crucially, compliance on `playlist_owner="my"` collapses from 32/32 ($\lambda=0.0$) and 26/32 ($\lambda=0.25$) to **1/32** at $\lambda=0.5$ (and 0/32 for $\lambda \ge 0.75$), even though noise robustness at $\lambda=0.5$ still lags the full adapter by 27.2 points (61.80% vs. 89.00%). The same cliff appears on the full 500-utterance `AddToPlaylist` validation split, where `"my"` compliance drops from 99/119 at $\lambda=0.25$ to **1/119** at $\lambda=0.5$.
-- **ATIS (1,000 utterances):** Wrong-slot copies stay low at $\lambda=0.0$ (3) and $\lambda=0.25$ (69), then surge to **740** at $\lambda=0.5$ and 1,008 at $\lambda=0.75$, pulling advised F1 down from 80.22 ($\lambda=0.25$) to 71.44 ($\lambda=0.5$) and 66.68 ($\lambda=1.0$). Meanwhile, dialing $\lambda \le 0.25$ reintroduces severe `Solo` JSON parse failures (5.6% at $\lambda=0.25$ and 11.7% at $\lambda=0.0$) and sacrifices SNIPS F1 (75.29 vs. 79.48). No adapter scale $\lambda$ preserves formatting stability and noise rejection without triggering stubbornness.
+- **ATIS (1,000 utterances):** Wrong-slot copies stay low at $\lambda=0.0$ (3) and $\lambda=0.25$ (69), then surge to **740** at $\lambda=0.5$ and 1,008 at $\lambda=0.75$, pulling advised F1 down from 80.22 ($\lambda=0.25$) to 71.44 ($\lambda=0.5$) and 66.68 ($\lambda=1.0$). Meanwhile, dialing $\lambda \le 0.25$ reintroduces severe `Solo` format failures (5.6% at $\lambda=0.25$ and 11.7% at $\lambda=0.0$) and sacrifices SNIPS F1 (75.29 vs. 79.48). No adapter scale $\lambda$ preserves formatting stability and noise rejection without triggering stubbornness.
 
 ### 3.4 Unfamiliar Slot Names Are Not the Cause
 
@@ -168,7 +168,7 @@ If unfamiliarity with unseen slot names drove the problem, the extractor should 
 
 | Routing Policy (Budget) | F1 | Fixed | Broken |
 | :--- | ---: | ---: | ---: |
-| Null (`Solo`, 0%) | 75.05 | 0 | 0 |
+| `Solo` (0%) | 75.05 | 0 | 0 |
 | Full advice (100%) | 79.39 | 214 | 87 |
 | Oracle (10%, 530 asked) | 79.44 | 136 | 0 |
 | Oracle (25%) | 80.00 | 195 | 11 |
@@ -181,7 +181,7 @@ If unfamiliarity with unseen slot names drove the problem, the extractor should 
 
 Finally, could we avoid conflicts at inference time by querying the advisor *only* when the extractor is uncertain? Evaluating selective routing on the 700-utterance SNIPS benchmark (Table 4) shows that output token confidence is a much better uncertainty signal than prompted self-report: asking the model whether it needs help yields an AUROC of only 0.4376 before generation (asking *less* often when wrong: 28.1% vs. 37.8% when right) and 0.472 after generation, whereas output token confidence reaches an AUROC of 0.744 (0.717 on `NONE` predictions). Under an oracle routing policy that queries only the top 10%–25% most beneficial slots, F1 reaches 79.44–80.00, matching or beating 100% full advice (79.39) at a fraction of the query cost.
 
-Yet uncertainty routing is purely an efficiency tool, not a cure for stubbornness. Among the 530 slots queried under 10% oracle routing, 394 remain unfixed—and on **167** of those unfixed slots, the advisor actually supplies the exact gold answer (146 gold spans and 21 valid `drop` notes), which the extractor still rejects. Because the extractor is highly confident in its source-trained priors, unseen F1 on `AddToPlaylist` stays near zero (1.45–4.30) regardless of the routing budget.
+Yet uncertainty routing is purely an efficiency tool, not a cure for stubbornness. Among the 530 slots queried under 10% oracle routing, 394 remain unfixed—and on **167** of those unfixed slots, the advisor actually supplies the exact gold answer (146 gold spans and 21 valid absent-slot predictions), which the extractor still rejects. Because the extractor is highly confident in its source-trained priors, unseen F1 on `AddToPlaylist` stays near zero (1.45–4.30) regardless of the routing budget.
 
 ---
 
@@ -216,14 +216,14 @@ To verify that source fine-tuning installs a targeted lexical refusal rather tha
 
 #### Competitive Oscillation Before Convergence
 
-Tracking the 119 `AddToPlaylist` validation utterances where the advisor correctly proposes `keep:"my"` shows that the extractor does not forget `"my"` smoothly. Instead, compliance oscillates sharply as source supervision competes against the base model's prior: after accepting `"my"` at step 100 (`Solo` 84/119, advised 27/119), compliance drops to 0/119 across steps 200–600, rebounds to roughly half of validation instances at steps 700 (56/119) and 900 (69/119), and finally locks into near-zero compliance from step 1200 onward (0/119 at selected checkpoint 1800).
+Tracking the 119 `AddToPlaylist` validation utterances where the advisor correctly proposes `"my"` for `playlist_owner` shows that the extractor does not forget `"my"` smoothly. Instead, compliance oscillates sharply as source supervision competes against the base model's prior: after accepting `"my"` at step 100 (`Solo` 84/119, advised 27/119), compliance drops to 0/119 across steps 200–600, rebounds to roughly half of validation instances at steps 700 (56/119) and 900 (69/119), and finally locks into near-zero compliance from step 1200 onward (0/119 at selected checkpoint 1800).
 
 #### Causal Localization to Late-Layer Lexical Priors
 
 Probing the extractor's next-token probabilities on `playlist_owner="my"` conflicts ($n=707$) confirms that this converged stubbornness is a narrow word-level suppression:
 
 - **Base vs. fine-tuned next-token prior:** On actual conflict prompts, untuned `Qwen3-8B` assigns `"my"` as its top-1 next token in **99.72%–99.86%** of cases, whereas the source-tuned extractor drops to **0.0%** across all three seeds.
-- **Counterfactual span substitution:** If we keep the exact same utterance, slot name, and advisor note format but replace the word `"my"` with an ordinary phrase (`"daphne s"`, $n=696$), the source-tuned extractor immediately resumes following the advisor, raising its top-1 acceptance rate from 0.0% to **56.32%–96.12%** across seeds. The extractor's advice-following circuit is intact; only the word `"my"` is blocked.
+- **Counterfactual span substitution:** If we keep the exact same utterance, slot name, and advisor suggestion format but replace the word `"my"` with an ordinary phrase (`"daphne s"`, $n=696$), the source-tuned extractor immediately resumes following the advisor, raising its top-1 acceptance rate from 0.0% to **56.32%–96.12%** across seeds. The extractor's advice-following circuit is intact; only the word `"my"` is blocked.
 - **Single-layer activation patching:** Patching the residual stream activation from a single late layer (layer 34 out of 36) of the untuned base model into the source-tuned extractor at the target slot token ($n=273$ per seed) restores `"my"` as the top-1 next token in **95.24%–98.53%** of cases (reaching **98.90%–100.0%** at layers 35–36). Source fine-tuning thus acts as a localized late-layer gate that vetoes specific words penalized during source training.
 
 ### 4.4 Why Blanket Overrides Hurt Overall
@@ -231,7 +231,6 @@ Probing the extractor's next-token probabilities on `playlist_owner="my"` confli
 | Benchmark (Scope) | Rule | $\Delta$F1 | Fixed : Harmed | Cluster Acc. |
 | :--- | :--- | ---: | ---: | ---: |
 | SNIPS (all 52 clusters) | `V-always` | $-2.77$ | 1,996.7 : 4,939.7 | 27.2% |
-| | `V-tag` | $-2.43$ | 1,942.3 : 4,580.0 | 31.6% |
 | SNIPS (23 span clusters only) | `V-always` | $+0.74$ | 1,129.0 : 1,050.7 | — |
 | ATIS (29 clusters / 3 seeds) | `V-always` | $-2.14$ | 166.7 : 1,042.0 | 28.8% |
 
@@ -239,7 +238,7 @@ Probing the extractor's next-token probabilities on `playlist_owner="my"` confli
 
 If conflicts concentrate in a few recurring clusters, why not simply force the extractor to follow the advisor whenever a disagreement falls into one of those clusters? Table 6 shows why blanket override rules fail: **recurring conflict clusters contain both genuine target conventions and recurring advisor hallucinations.**
 
-Alongside valid target conventions like `playlist_owner="my"` or `object_select="this"`, the advisor also repeatedly proposes invalid spans that violate target guidelines—such as tagging generic words like `"weather"` for `condition_description` or `"restaurant"` for `restaurant_type` on SNIPS, or attaching spurious modifiers on ATIS. Consequently, forcing the extractor to accept all 52 recurring SNIPS clusters (`V-always`) lowers overall F1 by **$-2.77$** (fixing 1,996.7 instances but harming 4,939.7; 27.2% cluster accuracy), and trusting only explicit `keep` tags (`V-tag`) still loses **$-2.43$** F1. On ATIS, `V-always` across the discovered clusters drops F1 by **$-2.14$** (166.7 fixed vs. 1,042.0 harmed). Even if we restrict `V-always` to the 23 specific `(slot, span)` clusters on SNIPS, it harms nearly as many predictions as it fixes ($1{,}129.0 : 1{,}050.7$, $+0.74$ F1) and severely damages domains like `GetWeather` ($-4.31$ F1). Resolving stubbornness therefore requires separating valid convention clusters from recurring advisor errors.
+Alongside valid target conventions like `playlist_owner="my"` or `object_select="this"`, the advisor also repeatedly proposes invalid spans that violate target guidelines—such as tagging generic words like `"weather"` for `condition_description` or `"restaurant"` for `restaurant_type` on SNIPS, or attaching spurious modifiers on ATIS. Consequently, forcing the extractor to accept all 52 recurring SNIPS clusters (`V-always`) lowers overall F1 by **$-2.77$** (fixing 1,996.7 instances but harming 4,939.7; 27.2% cluster accuracy). On ATIS, `V-always` across the discovered clusters drops F1 by **$-2.14$** (166.7 fixed vs. 1,042.0 harmed). Even if we restrict `V-always` to the 23 specific `(slot, span)` clusters on SNIPS, it harms nearly as many predictions as it fixes ($1{,}129.0 : 1{,}050.7$, $+0.74$ F1) and severely damages domains like `GetWeather` ($-4.31$ F1). Resolving stubbornness therefore requires separating valid convention clusters from recurring advisor errors.
 
 ---
 
@@ -249,20 +248,20 @@ Having established that advisor–extractor conflicts stem from clustered prior 
 
 ### 5.1 Zero-Label Structural De-Biasing: Same-Family Span-Binding Gate
 
-On hierarchical schemas such as ATIS, where source-trained extractors exhibit schema-bias slot reassignment (Section 3), a deterministic structural output gate can repair hijacked spans using only schema slot names and current advisor notes—requiring neither target labels nor retraining.
+On hierarchical schemas such as ATIS, where source-trained extractors exhibit schema-bias slot reassignment (Section 3), a deterministic structural output gate can repair hijacked spans using only schema slot names and current advisor suggestions—requiring neither target labels nor retraining.
 
 #### Mechanism
 
-Define the slot-family head $h(s)$ as the final dot-delimited segment of a slot name $s$ (e.g., $h(\texttt{fromloc.city\_name}) = h(\texttt{city\_name}) = \texttt{city\_name}$). Whenever the extractor outputs a non-empty value $v$ on slot $s_k$ for which the advisor proposed no candidate span ($c_k = \mathrm{null}$), while the advisor proposed $c_j = v$ on a distinct same-family slot $s_j$ ($h(s_j) = h(s_k)$) that the extractor left `NONE`, the **Same-Family Span-Binding Gate** blocks the hijacked prediction on $s_k$ and rebinds $v$ to $s_j$. Note that when $S_{\mathrm{seen}} = \varnothing$ (as on ATIS), a seen-slot gate cannot fire, making structural rebinding the primary zero-label lever.
+Define the slot-family head $h(s)$ as the final dot-delimited segment of a slot name $s$ (e.g., $h(\texttt{fromloc.city\_name}) = h(\texttt{city\_name}) = \texttt{city\_name}$). Whenever the extractor outputs a non-empty value $v$ on slot $s_k$ for which the advisor proposed no candidate span, while the advisor proposed $v$ on a distinct same-family slot $s_j$ ($h(s_j) = h(s_k)$) that the extractor left `NONE`, the **Same-Family Span-Binding Gate** blocks the hijacked prediction on $s_k$ and rebinds $v$ to $s_j$. Note that when $S_{\mathrm{seen}} = \varnothing$ (as on ATIS), a seen-slot gate cannot fire, making structural rebinding the primary zero-label lever.
 
 #### Why Family Restriction Is Mandatory
 
-Although the gate was originally formulated *post hoc* from ATIS test error flow (seed 3407, 5,371 utterances, `DeepSeek-V4-Flash`), restricting rebinding to same-head families is essential for cross-domain safety. As shown in Table 7, unconstrained cross-family variants push ATIS seed 3407 even higher—from 66.91 baseline ($\mathrm{TP}=13{,}371$, $\mathrm{FP}=8{,}879$, $\mathrm{FN}=4{,}349$) to 81.10 for Full Bind ($\mathrm{TP}=15{,}023$, $\mathrm{FP}=4{,}303$), 81.09 for Role-Family Bind, and 81.94 for Family+Drop (vs. 75.79 for Block hijack alone, $\mathrm{FP}=4{,}002$, and 75.70 for Drop gate)—but they do so only by overfitting ATIS's zero-seen-slot topology. On SNIPS (10,984 utterances × 3 seeds × 3 advisors, `Qwen3-27B` seed 5203 omitted; *Descriptive* transfer check), Full Bind *lowers* F1 for every advisor: `V4-Flash` drops $79.69 \to 78.47$, `V3.2` drops $78.60 \to 76.64$, and `Qwen3-27B` drops $79.68 \to 77.53$, while Family+Drop drops further to 77.19 / 75.72 / 75.93. By contrast, Same-Family Span-Binding preserves a $+11.55$ F1 gain on ATIS seed 3407 ($66.91 \to 78.46$; $\mathrm{P}=74.91$, $\mathrm{R}=82.35$, $\mathrm{TP}=14{,}593$, $\mathrm{FP}=4{,}887$, $\mathrm{FN}=3{,}127$; 2,938 utterances changed), surpassing raw advisor notes (77.60), while guaranteeing an exact 0.00 side effect on flat schemas such as SNIPS (79.69 / 78.60 / 79.68).
+Although the gate was originally formulated *post hoc* from ATIS test error flow (seed 3407, 5,371 utterances, `DeepSeek-V4-Flash`), restricting rebinding to same-head families is essential for cross-domain safety. As shown in Table 7, unconstrained cross-family variants push ATIS seed 3407 even higher—from 66.91 baseline ($\mathrm{TP}=13{,}371$, $\mathrm{FP}=8{,}879$, $\mathrm{FN}=4{,}349$) to 81.10 for Full Bind ($\mathrm{TP}=15{,}023$, $\mathrm{FP}=4{,}303$), 81.09 for Role-Family Bind, and 81.94 for Family+Drop (vs. 75.79 for Block hijack alone, $\mathrm{FP}=4{,}002$, and 75.70 for Drop gate)—but they do so only by overfitting ATIS's zero-seen-slot topology. On SNIPS (10,984 utterances × 3 seeds × 3 advisors, `Qwen3-27B` seed 5203 omitted; *Descriptive* transfer check), Full Bind *lowers* F1 for every advisor: `V4-Flash` drops $79.69 \to 78.47$, `V3.2` drops $78.60 \to 76.64$, and `Qwen3-27B` drops $79.68 \to 77.53$, while Family+Drop drops further to 77.19 / 75.72 / 75.93. By contrast, Same-Family Span-Binding preserves a $+11.55$ F1 gain on ATIS seed 3407 ($66.91 \to 78.46$; $\mathrm{P}=74.91$, $\mathrm{R}=82.35$, $\mathrm{TP}=14{,}593$, $\mathrm{FP}=4{,}887$, $\mathrm{FN}=3{,}127$; 2,938 utterances changed), surpassing raw advisor suggestions (77.60), while guaranteeing an exact 0.00 side effect on flat schemas such as SNIPS (79.69 / 78.60 / 79.68).
 
 | Gate Variant | ATIS (3407) | SNIPS V4 | SNIPS V3.2 | SNIPS Qwen |
 | :--- | ---: | ---: | ---: | ---: |
 | Base (ungated) | 66.91 | 79.69 | 78.60 | 79.68 |
-| Raw advisor notes | 77.60 | — | — | — |
+| Raw advisor suggestions | 77.60 | — | — | — |
 | Block hijack only | 75.79 | — | — | — |
 | Drop gate | 75.70 | — | — | — |
 | Full Bind | 81.10 | 78.47 | 76.64 | 77.53 |
@@ -270,25 +269,25 @@ Although the gate was originally formulated *post hoc* from ATIS test error flow
 | Family + Drop | 81.94 | 77.19 | 75.72 | 75.93 |
 | **Same-Family Bind** | **78.46** | **79.69** | **78.60** | **79.68** |
 
-*Table 7: Ablation of Span-Binding Gate variants on ATIS full test (seed 3407, 5,371 utts, Post hoc) and SNIPS transfer check (10,984 utts × 3 seeds × 3 advisors, Descriptive). Only Same-Family Bind preserves ATIS gains above raw notes while guaranteeing 0.00 side effect on SNIPS.*
+*Table 7: Ablation of Span-Binding Gate variants on ATIS full test (seed 3407, 5,371 utts, Post hoc) and SNIPS transfer check (10,984 utts × 3 seeds × 3 advisors, Descriptive). Only Same-Family Bind preserves ATIS gains above raw advisor suggestions while guaranteeing 0.00 side effect on SNIPS.*
 
 #### Independent Reproduction and Clean Out-of-Sample Validation
 
 On the independent 2,686-utterance ATIS evaluation half (`Option B1`, `V4-Flash`, *Pre-set rule* baseline), Same-Family Span-Binding reproduces a $+13.03$ F1 gain across all 3 seeds ($65.20 \to 78.23$ mean; seed 3407: $66.72 \to 77.89$, seed 4101: $61.75 \to 78.67$, seed 5203: $67.13 \to 78.14$).
 
-More importantly, in a clean out-of-sample validation on 500 untouched ATIS validation utterances with freshly generated zero-shot `DeepSeek-V4-Flash` notes (*Pre-set rule*), the unchanged Same-Family Span-Binding Gate passes the pre-set $\ge +5.0$ F1 threshold in **3/3 seeds**:
+More importantly, in a clean out-of-sample validation on 500 untouched ATIS validation utterances with freshly generated zero-shot `DeepSeek-V4-Flash` advice (*Pre-set rule*), the unchanged Same-Family Span-Binding Gate passes the pre-set $\ge +5.0$ F1 threshold in **3/3 seeds**:
 
 - Seed 3407: $68.36 \to 78.30$ (**$+9.94$** F1, 95% CI $[8.80, 11.14]$, 253/500 utterances changed);
 - Seed 4101: $62.23 \to 77.12$ (**$+14.89$** F1, 95% CI $[13.28, 16.55]$, 320/500 changed);
 - Seed 5203: $66.89 \to 77.81$ (**$+10.92$** F1, 95% CI $[9.81, 12.11]$, 297/500 changed).
 
-Across the three seeds, mean F1 rises from 65.83 to 77.74 (**$+11.92$** F1; paired `Solo` mean 47.19), again exceeding raw advisor notes (75.85). Extending to 18 additional secondary ATIS runs (*Descriptive*; validation with `Luna xhigh` and full test with `V4-Flash` and `Qwen3-27B` across `advisor_aware` and `direct_notes`), Same-Family Span-Binding improves **21/21 ATIS runs total** by $+9.43$ to $+21.72$ F1: validation `Luna xhigh` gains $+12.90$ ($66.49 \to 79.39$, `advisor_aware`) and $+11.30$ ($65.45 \to 76.75$, `direct_notes`), while test runs gain $+13.51$ ($65.34 \to 78.84$, `advisor_aware+V4`), $+15.30$ ($58.84 \to 74.15$, `advisor_aware+Qwen`), $+12.20$ ($64.47 \to 76.67$, `direct+V4`), and $+12.66$ ($61.59 \to 74.25$, `direct+Qwen`), whereas `drop`-tag filtering alone adds only $+0.06$ mean F1 on `Qwen3-27B`.
+Across the three seeds, mean F1 rises from 65.83 to 77.74 (**$+11.92$** F1; paired `Solo` mean 47.19), again exceeding raw advisor suggestions (75.85). Extending across 18 additional secondary ATIS runs spanning multiple advisors and evaluation splits (*Descriptive*), Same-Family Span-Binding improves **21/21 ATIS runs total** by $+9.43$ to $+21.72$ F1.
 
 ### 5.2 Ceiling of Zero-Label Cluster Heuristics
 
-Finally, we test whether uniform label-free heuristics can resolve clustered convention omissions on SNIPS without target labels. We evaluate three fixed rules over the 23 SNIPS span clusters (`V4-Flash`, 3 seeds; *Post hoc* subset in Stage 0, replicated as a *Pre-set rule* baseline in Stage 1): `V-always` (always adopt the cluster's advisor span), `V-tag` (adopt when the advisor tags `keep`), and `V-vote` (adopt when the advisor agrees by majority vote). On the 23 span clusters, these heuristics yield only modest gains with low precision: `V-always` adds $+0.74$ F1 (80.43, $1{,}129:1{,}050.7 = 1.07:1$ fixed:harmed), `V-tag` adds $+0.78$ (80.47, $1{,}129:1{,}025.7$), and `V-vote` adds $+0.98$ (80.67, $923.3:632.3 = 1.46:1$). Across `V3.2` (`V-vote` $+1.29$) and `Qwen3-27B` (`V-vote` $+1.84$), fixed:harmed ratios remain poor (1.07:1–2.00:1 on `V4-Flash` and `V3.2`).
+Finally, we test whether uniform label-free heuristics can resolve clustered convention omissions on SNIPS without target labels. We evaluate fixed rules over the 23 SNIPS span clusters (`V4-Flash`, 3 seeds; *Post hoc* subset in Stage 0, replicated as a *Pre-set rule* baseline in Stage 1): `V-always` (always adopt the cluster's advisor span) and `V-vote` (adopt when the advisor agrees by majority vote). On the 23 span clusters, these heuristics yield only modest gains with low precision: `V-always` adds $+0.74$ F1 (80.43, $1{,}129:1{,}050.7 = 1.07:1$ fixed:harmed) and `V-vote` adds $+0.98$ (80.67, $923.3:632.3 = 1.46:1$). Across `V3.2` (`V-vote` $+1.29$) and `Qwen3-27B` (`V-vote` $+1.84$), fixed:harmed ratios remain poor (1.07:1–2.00:1 on `V4-Flash` and `V3.2`).
 
-When applied without subsetting or across datasets (*Pre-set rule* baselines), uniform zero-label heuristics fail outright. Across all 52 SNIPS clusters (span and slot clusters combined), every heuristic loses F1: `V-always` drops $-2.77$, `V-tag` drops $-2.43$, and `V-vote` drops $-0.37$. On ATIS (29 clusters across 3 seeds), `V-always` drops $-2.14$ F1 ($166.7:1{,}042 = 0.16:1$) and `V-tag` drops $-0.86$ ($430.3:890 = 0.48:1$). Zero-label heuristics fail because they have no signal to separate valid target conventions (such as `"my"` or `"this"`) from recurring advisor mistakes (such as `"weather"` or `"flights"`).
+When applied without subsetting or across datasets (*Pre-set rule* baselines), uniform zero-label heuristics fail outright. Across all 52 SNIPS clusters (span and slot clusters combined), every heuristic loses F1: `V-always` drops $-2.77$ and `V-vote` drops $-0.37$. On ATIS (29 clusters across 3 seeds), `V-always` drops $-2.14$ F1 ($166.7:1{,}042 = 0.16:1$). Zero-label heuristics fail because they have no signal to separate valid target conventions (such as `"my"` or `"this"`) from recurring advisor mistakes (such as `"weather"` or `"flights"`).
 
 ---
 
@@ -360,7 +359,7 @@ To test whether annotation ambiguity, rather than cluster representation, is the
 
 ### 6.3 Secondary Extension: Span-to-Utterance Propagation
 
-Finally, `Option C` tests whether confirmed cluster verdicts from `S = V-k3` can propagate to utterances where the advisor did not propose the span (*Pre-set rule*). Rule `C1` (extending cluster verdicts to `Solo`-value disagreements) fails on SNIPS `V4-Flash` ($+0.003$ F1 over `S`, $4.6:2.6 = 1.74:1$, $+6$ labels; **FAIL**) and is ruled out (gating out its ATIS check of $+0.44$, $125.3:0.33 = 376:1$). Rule `C2` (propagating confirmed `follow` clusters such as `"my"` when the advisor missed or dropped the span in other utterances containing `"my"`) passes pre-set SNIPS rules ($+1.53$ F1 over `S` to 83.71, $790.4:24.5 = 32.2:1$, $+12.0$ labels $\to 81$ total; also $+1.82$ [$939:29.5$, $+18$ labels] on `V3.2` and $+0.47$ [$287.3:9$, $+6$ labels] on `Qwen3-27B`). However, `C2` completely fails to fire on ATIS ($+0.00$ F1, 0 active oracle clusters; **FAIL**), confining `C2` to a SNIPS-specific secondary finding rather than a general mechanism.
+Finally, `Option C` tests whether confirmed cluster verdicts from `S = V-k3` can propagate to utterances where the advisor did not propose the span (*Pre-set rule*). Rule `C1` (extending cluster verdicts to `Solo`-value disagreements) fails on SNIPS `V4-Flash` ($+0.003$ F1 over `S`, $4.6:2.6 = 1.74:1$, $+6$ labels; **FAIL**) and is ruled out (gating out its ATIS check of $+0.44$, $125.3:0.33 = 376:1$). Rule `C2` (propagating confirmed `follow` clusters such as `"my"` when the advisor missed or omitted the span in other utterances containing `"my"`) passes pre-set SNIPS rules ($+1.53$ F1 over `S` to 83.71, $790.4:24.5 = 32.2:1$, $+12.0$ labels $\to 81$ total; also $+1.82$ [$939:29.5$, $+18$ labels] on `V3.2` and $+0.47$ [$287.3:9$, $+6$ labels] on `Qwen3-27B`). However, `C2` completely fails to fire on ATIS ($+0.00$ F1, 0 active oracle clusters; **FAIL**), confining `C2` to a SNIPS-specific secondary finding rather than a general mechanism.
 
 ---
 
@@ -387,14 +386,14 @@ Our findings rest on SNIPS (7-fold leave-one-domain-out across crowd-sourced int
 
 ### Single 8B Extractor Architecture
 
-Although we evaluate four distinct frozen advisors (`DeepSeek-V4-Flash`, `DeepSeek-V3.2`, `Qwen3-27B`, and `Luna xhigh`) and two cross-family judges (`GLM-5.3-Flash` and `Claude-Haiku-5-5`), the fine-tuned extractor is always `Qwen3-8B` (LoRA $r=16$). Whether larger extractors or alternative regularization schemes alter the early $\mathcal{C}_{\mathrm{conf}}$–$\mathcal{R}$ trade-off is left to future work.
+Although we evaluate four distinct frozen advisors (`DeepSeek-V4-Flash`, `DeepSeek-V3.2`, `Qwen3-27B`, and `Luna xhigh`) and two cross-family judges (`GLM-5.3-Flash` and `Claude-Haiku-5-5`), the fine-tuned extractor is always `Qwen3-8B`. Whether larger extractors or alternative regularization schemes alter the early $\mathcal{C}_{\mathrm{conf}}$–$\mathcal{R}$ trade-off is left to future work.
 
 ---
 
 ## 8. Related Work
 
-- **Zero-shot cross-domain slot filling and LLM function calling.** Early cross-domain slot filling transfers to unseen target domains by conditioning sequence taggers on slot descriptions (Bapna et al., 2017; Lee & Jha, 2019) or example values (Shah et al., 2019), with context-aware representations (Siddique et al., 2021), decoupled span detection and typing (Liu et al., 2020), and contrastive slot sharpening (He et al., 2020; Zhang & Zhang, 2023) improving generalization. Other formulations cast slot filling as question answering or machine reading comprehension (Du et al., 2021; Yu et al., 2021; Liu et al., 2022; Liu et al., 2025), generative prompting (Yan et al., 2022; Li et al., 2023), or retrieval-augmented demonstration matching (Song et al., 2025). Prompted LLMs alone struggle with strict span boundaries compared to dialogue state tracking (Pan et al., 2023); staged prompting (Zhu et al., 2024), instruction tuning (Mirza et al., 2024), teacher distillation (Rana et al., 2025), and synthetic data generation (Huang et al., 2025) narrow this gap. In parallel, schema-driven dialogue modeling (Rastogi et al., 2020; Lin et al., 2021; Zhao et al., 2022) and function-calling formulations (Li et al., 2024; Schick et al., 2023; Abdelaziz et al., 2024; Patil et al., 2025) establish structured tool-call interfaces for extraction, which our advisor-guided extractor uses as its output format.
-- **Small–large model collaboration.** Recent work pairs compact extractors with larger LLMs in complementary roles. In GRSF (Li et al., 2025), an LLM generates slot knowledge filtered by a trained evaluator for a small tagger; in SynAug (Li et al., 2025) and SuperICL (Xu et al., 2024), a small model's predictions are injected into an LLM prompt that makes the final call. Other hybrids let a small model route uncertain intents to an LLM (Chen & Wang, 2025), learn question-generation strategies for zero-shot QA (Tavares et al., 2023), follow an LLM guidance prefix (Yao et al., 2024), or use reinforcement learning to decide when a 7B NER model should invoke external search (Chen et al., 2026). Closest in terminology, Asawa et al. (2026) train a small RL advisor to steer a frozen black-box LLM with free-form advice. Our setting reverses this asymmetry: a frozen LLM advisor provides structured per-slot notes to a source-trained 8B extractor, allowing us to isolate how supervised fine-tuning governs the extractor's willingness to follow or override external advice.
+- **Zero-shot cross-domain slot filling.** Early cross-domain slot filling transfers to unseen target domains by conditioning sequence taggers on slot descriptions (Bapna et al., 2017; Lee & Jha, 2019) or example values (Shah et al., 2019), with context-aware representations (Siddique et al., 2021), decoupled span detection and typing (Liu et al., 2020), and contrastive slot sharpening (He et al., 2020; Zhang & Zhang, 2023) improving generalization. Other formulations cast slot filling as question answering or machine reading comprehension (Du et al., 2021; Yu et al., 2021; Liu et al., 2022; Liu et al., 2025), generative prompting (Yan et al., 2022; Li et al., 2023), or retrieval-augmented demonstration matching (Song et al., 2025). Prompted LLMs alone struggle with strict span boundaries compared to dialogue state tracking (Pan et al., 2023); staged prompting (Zhu et al., 2024), instruction tuning (Mirza et al., 2024), teacher distillation (Rana et al., 2025), and synthetic data generation (Huang et al., 2025) narrow this gap. In parallel, schema-driven dialogue modeling (Rastogi et al., 2020; Lin et al., 2021; Zhao et al., 2022) establishes schema-conditioned interfaces for cross-domain extraction.
+- **Small–large model collaboration.** Recent work pairs compact extractors with larger LLMs in complementary roles. In GRSF (Li et al., 2025), an LLM generates slot knowledge filtered by a trained evaluator for a small tagger; in SynAug (Li et al., 2025) and SuperICL (Xu et al., 2024), a small model's predictions are injected into an LLM prompt that makes the final call. Other hybrids let a small model route uncertain intents to an LLM (Chen & Wang, 2025), learn question-generation strategies for zero-shot QA (Tavares et al., 2023), follow an LLM guidance prefix (Yao et al., 2024), or use reinforcement learning to decide when a 7B NER model should invoke external search (Chen et al., 2026). Closest in terminology, Asawa et al. (2026) train a small RL advisor to steer a frozen black-box LLM with free-form advice. Our setting reverses this asymmetry: a frozen LLM advisor provides candidate slot-level guidance to a source-trained 8B extractor, allowing us to isolate how supervised fine-tuning governs the extractor's willingness to follow or override external advice.
 - **Controllability, noise robustness, and context-parametric inversion.** Balancing external context against parametric priors is a central tension in conditional generation. Li et al. (2022) formalize *controllability* (following counterfactual or conflicting context) versus *robustness* (ignoring irrelevant context) and propose Knowledge-Aware Fine-Tuning (KAFT) to preserve both. Similarly, RAFT (Zhang et al., 2024) and Yoran et al. (2024) train models on mixtures of oracle and distractor passages so retrieval-augmented generators ignore noisy context. However, Goyal et al. (2025) show that instruction fine-tuning exhibits *context-parametric inversion*: context reliance rises early in training and then collapses as non-context-critical examples dominate gradient updates. We observe an analogous dynamic in advisor-guided slot filling: source SFT makes the extractor highly robust to noisy advice while collapsing controllability on conflicting spans, yielding a robust-yet-stubborn regime where both source-prior convention omissions and schema-bias slot reassignments emerge.
 - **Guideline refinement and interactive weak supervision.** Several recent frameworks address schema ambiguity through annotation guidelines or weak-supervision feedback. GoLLIE (Sainz et al., 2024) trains IE models to follow detailed Python-formatted annotation guidelines, assuming those target guidelines are already authored and available in the prompt. DiZiNER (Kim & Yoon, 2026) simulates pilot annotation across multiple LLMs and refines zero-shot NER instructions from inter-model disagreements without target labels. Interactive weak supervision (Boecking et al., 2021) queries human annotators on candidate labeling-function heuristics rather than individual examples. Our convention-conflict setting differs fundamentally from all three: target slot-filling schemas supply only brief descriptions without target-specific convention rules, inter-model disagreement cannot identify which convention a target benchmark actually follows (causing zero-label resolution to fail in Section 6), and minimal binary cluster-level verification resolves this identifiability gap with orders-of-magnitude fewer annotations than utterance-level few-shot fine-tuning.
 
