@@ -6,6 +6,8 @@ import { defineConfig } from 'astro/config';
 
 import sitemap from '@astrojs/sitemap';
 import mdx from '@astrojs/mdx';
+import remarkMath from 'remark-math';
+import rehypeMathjax from 'rehype-mathjax';
 
 import { SITE_URL } from './src/consts';
 import { remarkDitherImages } from './src/lib/remark-dither-images';
@@ -33,7 +35,8 @@ export default defineConfig({
   site: SITE_URL,
   integrations: [sitemap(), mdx(), syncDitheredAssets()],
   markdown: {
-    remarkPlugins: [remarkDitherImages],
+    remarkPlugins: [remarkMath, remarkDitherImages],
+    rehypePlugins: [rehypeMathjax],
     shikiConfig: { theme: 'css-variables' },
   },
 });
