@@ -6,7 +6,7 @@ import expressiveCode from 'astro-expressive-code';
 
 // https://astro.build/config
 export default defineConfig({
-  site: 'https://astro-blog-phi-ten.vercel.app',
+  site: 'https://trevor.ccwu.cc',
   integrations: [sitemap(), icon(), expressiveCode({
     themes: ['min-dark', 'rose-pine-dawn'],
     themeCssSelector: (theme) => `[data-theme='${theme.type}']`})],

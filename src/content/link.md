@@ -7,8 +7,8 @@
 #### 本站信息
 
 - **Name**：Trevor's Blog
-- **Link**：`https://astro-blog-phi-ten.vercel.app`
-- **Avatar**：`https://astro-blog-phi-ten.vercel.app/favicon.png`
+- **Link**：`https://trevor.ccwu.cc`
+- **Avatar**：`https://trevor.ccwu.cc/favicon.png`
 - **Desc**：Trevor's personal blog.
 
 #### 申请格式

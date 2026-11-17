@@ -6,7 +6,7 @@ export const BASE_CONFIG = {
   author: 'Trevor',
   favicon: '/favicon.png',
   avatar: '/avatar.png',
-  site_url: 'https://astro-blog-phi-ten.vercel.app',
+  site_url: 'https://trevor.ccwu.cc',
   create_time: '2023-04-21',
 }
 
