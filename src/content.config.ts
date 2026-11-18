@@ -10,10 +10,16 @@ const notes = defineCollection({
   }),
   schema: z.object({
     title: z.string(),
+    title_zh: z.string().optional(),
+    title_en: z.string().optional(),
     description: z.string().optional(),
+    description_zh: z.string().optional(),
+    description_en: z.string().optional(),
     pubDate: z.coerce.date(),
     updatedDate: z.coerce.date().optional(),
     published: z.boolean().default(false),
+    lang: z.enum(['zh', 'en']).optional(),
+    translationOf: z.string().optional(),
   }),
 });
 

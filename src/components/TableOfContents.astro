@@ -3,28 +3,66 @@ import type { MarkdownHeading } from 'astro';
 
 export interface Props {
   headings?: MarkdownHeading[];
+  headingsZh?: MarkdownHeading[];
+  headingsEn?: MarkdownHeading[];
 }
 
-const { headings = [] } = Astro.props;
+const { headings = [], headingsZh, headingsEn } = Astro.props;
 
-const candidateHeadings = headings.filter((h) => h.depth >= 2 && h.slug !== 'footnote-label');
-const minDepth = candidateHeadings.length > 0 ? Math.min(...candidateHeadings.map((h) => h.depth)) : 2;
-const tocHeadings = candidateHeadings.filter((h) => h.depth === minDepth);
-const showToc = tocHeadings.length >= 2;
+const filterTopHeadings = (list: MarkdownHeading[]) => {
+  const candidates = list.filter((h) => h.depth >= 2 && h.slug !== 'footnote-label');
+  const minDepth = candidates.length > 0 ? Math.min(...candidates.map((h) => h.depth)) : 2;
+  return candidates.filter((h) => h.depth === minDepth);
+};
+
+const isBilingual = Boolean(headingsZh || headingsEn);
+const tocHeadings = filterTopHeadings(headings);
+const tocHeadingsZh = filterTopHeadings(headingsZh ?? headings);
+const tocHeadingsEn = filterTopHeadings(headingsEn ?? headings);
+const showZh = isBilingual && tocHeadingsZh.length >= 2;
+const showEn = isBilingual && tocHeadingsEn.length >= 2;
+const showToc = isBilingual ? showZh || showEn : tocHeadings.length >= 2;
+const asideLangOnly = isBilingual && showZh !== showEn ? (showZh ? 'zh' : 'en') : undefined;
 ---
 
 {
   showToc && (
-    <aside class='toc' aria-label='Table of contents'>
-      <h2 class='toc-title'>Contents:</h2>
+    <aside class='toc' aria-label='Table of contents' data-lang-only={asideLangOnly}>
+      <h2 class='toc-title'>
+        <span data-lang-only='zh'>目录:</span>
+        <span data-lang-only='en'>Contents:</span>
+      </h2>
       <nav class='toc-nav' aria-label='On this page'>
-        <ul class='toc-list'>
-          {tocHeadings.map((heading) => (
-            <li>
-              <a href={`#${heading.slug}`}>{heading.text}</a>
-            </li>
-          ))}
-        </ul>
+        {isBilingual ? (
+          <>
+            {showZh && (
+              <ul class='toc-list' data-lang-only={showEn ? 'zh' : undefined}>
+                {tocHeadingsZh.map((heading) => (
+                  <li>
+                    <a href={`#${heading.slug}`}>{heading.text}</a>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {showEn && (
+              <ul class='toc-list' data-lang-only={showZh ? 'en' : undefined}>
+                {tocHeadingsEn.map((heading) => (
+                  <li>
+                    <a href={`#${heading.slug}`}>{heading.text}</a>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
+        ) : (
+          <ul class='toc-list'>
+            {tocHeadings.map((heading) => (
+              <li>
+                <a href={`#${heading.slug}`}>{heading.text}</a>
+              </li>
+            ))}
+          </ul>
+        )}
       </nav>
     </aside>
   )
@@ -136,11 +174,18 @@ const showToc = tocHeadings.length >= 2;
   const links = Array.from(toc?.querySelectorAll<HTMLAnchorElement>('.toc-list a') ?? []);
 
   if (toc && tocNav && links.length > 0) {
+    const article = document.querySelector<HTMLElement>('article');
     const items = links
       .map((link) => {
         const hash = link.getAttribute('href');
         const id = hash ? decodeURIComponent(hash.slice(1)) : '';
-        const target = id ? document.getElementById(id) : null;
+        if (!id) return null;
+
+        const langScope = link.closest<HTMLElement>('[data-lang-only]')?.dataset.langOnly;
+        const scopeRoot = langScope && article
+          ? article.querySelector<HTMLElement>(`[data-lang-only="${langScope}"]`) ?? document
+          : document;
+        const target = scopeRoot.querySelector<HTMLElement>(`[id="${CSS.escape(id)}"]`) ?? document.getElementById(id);
         return target ? { link, target } : null;
       })
       .filter((item): item is { link: HTMLAnchorElement; target: HTMLElement } => item !== null);
@@ -175,10 +220,18 @@ const showToc = tocHeadings.length >= 2;
         rafId = 0;
         if (window.getComputedStyle(toc).display === 'none') return;
 
-        const threshold = 120;
-        let current = items[0].link;
+        const visibleItems = items.filter(
+          (item) => item.link.getClientRects().length > 0 && item.target.getClientRects().length > 0,
+        );
+        if (visibleItems.length === 0) {
+          setActive(null);
+          return;
+        }
 
-        for (const item of items) {
+        const threshold = 120;
+        let current = visibleItems[0].link;
+
+        for (const item of visibleItems) {
           if (item.target.getBoundingClientRect().top <= threshold) {
             current = item.link;
           } else {
@@ -190,7 +243,7 @@ const showToc = tocHeadings.length >= 2;
           window.innerHeight + Math.ceil(window.scrollY) >=
           document.documentElement.scrollHeight - 2;
         if (atBottom) {
-          current = items[items.length - 1].link;
+          current = visibleItems[visibleItems.length - 1].link;
         }
 
         setActive(current);
@@ -211,6 +264,7 @@ const showToc = tocHeadings.length >= 2;
       window.addEventListener('scroll', scheduleUpdate, { passive: true });
       window.addEventListener('resize', scheduleUpdate, { passive: true });
       window.addEventListener('hashchange', scheduleUpdate);
+      window.addEventListener('langchange', scheduleUpdate);
       updateActive();
     }
   }

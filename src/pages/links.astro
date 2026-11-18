@@ -21,8 +21,8 @@ const links = await Promise.all(
 );
 ---
 
-<BaseLayout headProps={{ title: 'Links', description: '友情链接与交换说明', image: '/og/links.png' }}>
-  <NoteHeader title="Links" />
+<BaseLayout headProps={{ title: 'Links', titleZh: '友链', titleEn: 'Links', description: '友情链接与交换说明', image: '/og/links.png' }}>
+  <NoteHeader title="Links" titleZh="友链" titleEn="Links" />
 
   <section class="links-section">
     <ul class="links-list">
@@ -51,22 +51,43 @@ const links = await Promise.all(
   <hr />
 
   <section class="exchange-section">
-    <h2>交换友链</h2>
-    <p>如果你想与本站交换友链，欢迎通过 GitHub 与我联系。</p>
+    <div data-lang-only="zh">
+      <h2>交换友链</h2>
+      <p>如果你想与本站交换友链，欢迎通过 GitHub 与我联系。</p>
 
-    <h3>本站信息</h3>
-    <ul class="info-list">
-      <li><code>Name</code>: Trevor's Blog</li>
-      <li><code>Link</code>: <a href="https://trevor.ccwu.cc">https://trevor.ccwu.cc</a></li>
-      <li><code>Avatar</code>: <a href="https://trevor.ccwu.cc/favicon.png">https://trevor.ccwu.cc/favicon.png</a></li>
-      <li><code>Desc</code>: Trevor's personal blog.</li>
-    </ul>
+      <h3>本站信息</h3>
+      <ul class="info-list">
+        <li><code>Name</code>: Trevor's Blog</li>
+        <li><code>Link</code>: <a href="https://trevor.ccwu.cc">https://trevor.ccwu.cc</a></li>
+        <li><code>Avatar</code>: <a href="https://trevor.ccwu.cc/favicon.png">https://trevor.ccwu.cc/favicon.png</a></li>
+        <li><code>Desc</code>: Trevor's personal blog.</li>
+      </ul>
 
-    <h3>申请格式</h3>
-    <pre><code>- Name: 你的博客名称
+      <h3>申请格式</h3>
+      <pre><code>- Name: 你的博客名称
   Link: 你的博客网址 (需支持 HTTPS)
   Avatar: 你的头像链接
   Desc: 一句简短的博客描述</code></pre>
+    </div>
+
+    <div data-lang-only="en">
+      <h2>Link Exchange</h2>
+      <p>If you'd like to exchange links, feel free to reach out via GitHub.</p>
+
+      <h3>Site Info</h3>
+      <ul class="info-list">
+        <li><code>Name</code>: Trevor's Blog</li>
+        <li><code>Link</code>: <a href="https://trevor.ccwu.cc">https://trevor.ccwu.cc</a></li>
+        <li><code>Avatar</code>: <a href="https://trevor.ccwu.cc/favicon.png">https://trevor.ccwu.cc/favicon.png</a></li>
+        <li><code>Desc</code>: Trevor's personal blog.</li>
+      </ul>
+
+      <h3>Application Format</h3>
+      <pre><code>- Name: Your blog name
+  Link: Your blog URL (HTTPS required)
+  Avatar: Your avatar URL
+  Desc: A short description of your blog</code></pre>
+    </div>
   </section>
 </BaseLayout>
 

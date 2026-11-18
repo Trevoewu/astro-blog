@@ -5,7 +5,7 @@ import Notes from '@/components/Notes.astro';
 import NoteHeader from '@/components/NoteHeader.astro';
 ---
 
-<BaseLayout headProps={{ title: 'Notes', image: '/og/notes.png' }}>
-  <NoteHeader title='Notes' />
+<BaseLayout headProps={{ title: 'Notes', titleZh: '笔记', titleEn: 'Notes', image: '/og/notes.png' }}>
+  <NoteHeader title='Notes' titleZh='笔记' titleEn='Notes' />
   <Notes />
 </BaseLayout>

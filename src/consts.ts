@@ -7,7 +7,7 @@ export const PORTRAIT: { light: string; dark?: string } | undefined = {
   dark: '/portrait-dark.webp',
 };
 
-export const LINKS = [
+export const LINKS: { label: string; labelZh?: string; href: string }[] = [
   { label: 'GitHub', href: 'https://github.com/Trevoewu' },
-  { label: 'Links', href: '/links/' },
+  { label: 'Links', labelZh: '友链', href: '/links/' },
 ];

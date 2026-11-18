@@ -15,11 +15,23 @@ const { title } = Astro.props;
       {title === SITE_TITLE && PORTRAIT ? <Portrait {...PORTRAIT} /> : <a href='/'>{title}</a>}
     </h1>
   ) : (
-    <a class='back' href='/'><span aria-hidden='true'>↩</span>Index</a>
+    <a class='back' href='/'>
+      <span class='back-arrow' aria-hidden='true'>↩</span><span data-lang-only='zh'>首页</span><span data-lang-only='en'>Index</span>
+    </a>
   )}
+  <button type='button' class='lang-toggle' aria-label='切换语言 / Switch language'>
+    <span class='lang-opt' data-lang-opt='zh'>中</span><span class='sep' aria-hidden='true'>/</span><span class='lang-opt' data-lang-opt='en'>EN</span>
+  </button>
 </header>
 
 <style>
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1em;
+  }
+
   h1 {
     font-size: 1em;
   }
@@ -40,8 +52,102 @@ const { title } = Astro.props;
     text-decoration: none;
   }
 
-  .back span {
+  .back-arrow {
     display: inline-block;
     margin-inline-end: 1ch;
   }
+
+  .lang-toggle {
+    appearance: none;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    line-height: inherit;
+    color: var(--theme-sub-text);
+    cursor: pointer;
+    flex-shrink: 0;
+    white-space: nowrap;
+
+    &:focus-visible {
+      outline: 2px solid transparent;
+      background-color: var(--theme-text);
+      box-shadow: 0 0 0 2px var(--theme-text);
+      color: var(--theme-bg);
+      text-decoration-color: transparent;
+    }
+
+    &:focus-visible .lang-opt,
+    &:focus-visible .sep {
+      color: var(--theme-bg);
+      text-decoration-color: transparent;
+    }
+  }
+
+  .sep {
+    color: var(--theme-sub-text);
+    margin-inline: 0.35ch;
+  }
+
+  .lang-opt {
+    color: var(--theme-sub-text);
+    text-decoration: none;
+  }
+
+  :global(:root:not([data-lang='en'])) .lang-opt[data-lang-opt='zh'],
+  :global(:root[data-lang='en']) .lang-opt[data-lang-opt='en'] {
+    color: var(--theme-text);
+    text-decoration: underline;
+    text-decoration-color: var(--theme-link-underline);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    :global(:root:not([data-lang='en'])) .lang-toggle:hover .lang-opt[data-lang-opt='en'],
+    :global(:root[data-lang='en']) .lang-toggle:hover .lang-opt[data-lang-opt='zh'] {
+      color: var(--theme-text);
+      text-decoration: underline;
+      text-decoration-color: currentColor;
+      text-decoration-thickness: 2px;
+      text-underline-offset: 3px;
+    }
+  }
 </style>
+
+<script>
+  const toggle = document.querySelector<HTMLButtonElement>('.lang-toggle');
+
+  const getCurrentLang = (): 'zh' | 'en' =>
+    document.documentElement.dataset.lang === 'en' ? 'en' : 'zh';
+
+  const syncToggleA11y = (lang: 'zh' | 'en') => {
+    if (!toggle) return;
+    toggle.setAttribute(
+      'aria-label',
+      lang === 'en' ? 'Switch to Chinese (current: English)' : '切换为英文（当前：中文）',
+    );
+  };
+
+  if (toggle) {
+    syncToggleA11y(getCurrentLang());
+
+    toggle.addEventListener('click', () => {
+      const next = getCurrentLang() === 'en' ? 'zh' : 'en';
+      document.documentElement.dataset.lang = next;
+      document.documentElement.lang = next === 'en' ? 'en' : 'zh-CN';
+      try {
+        localStorage.setItem('lang', next);
+      } catch {
+        // Ignore storage write errors in restricted contexts
+      }
+      syncToggleA11y(next);
+      window.dispatchEvent(new CustomEvent('langchange', { detail: { lang: next } }));
+    });
+
+    window.addEventListener('langchange', (event) => {
+      const lang = (event as CustomEvent<{ lang?: string }>).detail?.lang === 'en' ? 'en' : 'zh';
+      syncToggleA11y(lang);
+    });
+  }
+</script>

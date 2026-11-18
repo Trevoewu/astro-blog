@@ -136,3 +136,8 @@ hr {
   list-style: none;
   padding-inline-start: 1.2em;
 }
+
+:root[data-lang='en'] [data-lang-only='zh'],
+:root:not([data-lang='en']) [data-lang-only='en'] {
+  display: none !important;
+}

@@ -9,25 +9,33 @@ import TableOfContents from '@/components/TableOfContents.astro';
 
 export interface Props {
   frontmatter: CollectionEntry<'notes'>['data'];
+  titleZh?: string;
+  titleEn?: string;
   image?: string;
   headings?: MarkdownHeading[];
+  headingsZh?: MarkdownHeading[];
+  headingsEn?: MarkdownHeading[];
   prev?: CollectionEntry<'notes'>;
   next?: CollectionEntry<'notes'>;
 }
 
 const {
   frontmatter: { title, description, pubDate, updatedDate },
+  titleZh,
+  titleEn,
   image,
   headings = [],
+  headingsZh,
+  headingsEn,
   prev,
   next,
 } = Astro.props;
 ---
 
-<BaseLayout headProps={{ title, description, image }}>
-  <NoteHeader {title} {pubDate} {updatedDate} />
+<BaseLayout headProps={{ title, titleZh, titleEn, description, image }}>
+  <NoteHeader {title} {titleZh} {titleEn} {pubDate} {updatedDate} />
 
-  <TableOfContents {headings} />
+  <TableOfContents {headings} {headingsZh} {headingsEn} />
 
   <article>
     <slot />

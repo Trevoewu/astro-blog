@@ -1,5 +1,6 @@
 ---
 import type { CollectionEntry } from 'astro:content';
+import { getNoteBilingualTitle, getNoteTranslations } from '@/lib/notes';
 
 export interface Props {
   prev?: CollectionEntry<'notes'>;
@@ -7,17 +8,34 @@ export interface Props {
 }
 
 const { prev, next } = Astro.props;
+const translations = prev || next ? await getNoteTranslations() : undefined;
+const prevTitle = prev ? getNoteBilingualTitle(prev, translations) : null;
+const nextTitle = next ? getNoteBilingualTitle(next, translations) : null;
 ---
 
 <nav>
   {prev && (
     <a class='prev' href={`/notes/${prev.id}/`} rel='prev'>
-      <span aria-hidden='true'>←</span>{prev.data.title}
+      <span class='arrow' aria-hidden='true'>←</span>{prevTitle ? (
+        <>
+          <span data-lang-only='zh'>{prevTitle.zh}</span>
+          <span data-lang-only='en'>{prevTitle.en}</span>
+        </>
+      ) : (
+        prev.data.title
+      )}
     </a>
   )}
   {next && (
     <a class='next' href={`/notes/${next.id}/`} rel='next'>
-      {next.data.title}<span aria-hidden='true'>→</span>
+      {nextTitle ? (
+        <>
+          <span data-lang-only='zh'>{nextTitle.zh}</span>
+          <span data-lang-only='en'>{nextTitle.en}</span>
+        </>
+      ) : (
+        next.data.title
+      )}<span class='arrow' aria-hidden='true'>→</span>
     </a>
   )}
 </nav>
@@ -51,7 +69,7 @@ const { prev, next } = Astro.props;
     }
   }
 
-  span {
+  .arrow {
     position: absolute;
     inset-block-start: 0;
   }
@@ -60,7 +78,7 @@ const { prev, next } = Astro.props;
     justify-self: start;
     padding-inline-start: 2ch;
 
-    span {
+    .arrow {
       inset-inline-start: 0;
     }
   }
@@ -70,7 +88,7 @@ const { prev, next } = Astro.props;
     justify-self: end;
     padding-inline-end: 2ch;
 
-    span {
+    .arrow {
       inset-inline-end: 0;
     }
   }

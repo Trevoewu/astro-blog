@@ -4,10 +4,21 @@ import { LINKS } from '@/consts';
 
 <footer>
   <span>
-    [↗]: {LINKS.map(({ label, href }) => {
+    [↗]: {LINKS.map(({ label, labelZh, href }) => {
       const isExternal = href.startsWith('http');
       return (
-        <><a target={isExternal ? '_blank' : undefined} rel={isExternal ? 'me noopener' : undefined} href={href}>{label}</a>, </>
+        <>
+          <a target={isExternal ? '_blank' : undefined} rel={isExternal ? 'me noopener' : undefined} href={href}>
+            {labelZh ? (
+              <>
+                <span data-lang-only='zh'>{labelZh}</span>
+                <span data-lang-only='en'>{label}</span>
+              </>
+            ) : (
+              label
+            )}
+          </a>,{' '}
+        </>
       );
     })}<a target='_blank' href='/rss.xml'>RSS</a>
   </span>
@@ -21,7 +32,7 @@ import { LINKS } from '@/consts';
     margin-top: 3em;
   }
 
-  span {
+  footer > span {
     color: var(--theme-sub-text);
   }
 

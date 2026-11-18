@@ -1,7 +1,8 @@
 ---
-import { getNotes } from '@/lib/notes';
+import { getNoteBilingualTitle, getNotes, getNoteTranslations } from '@/lib/notes';
 
 const notes = await getNotes();
+const translations = await getNoteTranslations();
 const notesByYear = Map.groupBy(notes, (note) => note.data.pubDate.getUTCFullYear());
 ---
 
@@ -10,11 +11,23 @@ const notesByYear = Map.groupBy(notes, (note) => note.data.pubDate.getUTCFullYea
     <li>
       <h3>{year}</h3>
       <ul>
-        {yearNotes.map((note) => (
-          <li>
-            <a href={`/notes/${note.id}/`}>{note.data.title}</a>
-          </li>
-        ))}
+        {yearNotes.map((note) => {
+          const bilingualTitle = getNoteBilingualTitle(note, translations);
+          return (
+            <li>
+              <a href={`/notes/${note.id}/`}>
+                {bilingualTitle ? (
+                  <>
+                    <span data-lang-only="zh">{bilingualTitle.zh}</span>
+                    <span data-lang-only="en">{bilingualTitle.en}</span>
+                  </>
+                ) : (
+                  note.data.title
+                )}
+              </a>
+            </li>
+          );
+        })}
       </ul>
     </li>
   ))}

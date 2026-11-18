@@ -4,11 +4,13 @@ import { SITE_DESCRIPTION, SITE_TITLE } from '@/consts';
 
 export interface Props {
   title?: string;
+  titleZh?: string;
+  titleEn?: string;
   description?: string;
   image?: string;
 }
 
-const { title = SITE_TITLE, description = SITE_DESCRIPTION, image } = Astro.props;
+const { title = SITE_TITLE, titleZh, titleEn, description = SITE_DESCRIPTION, image } = Astro.props;
 const canonicalURL = new URL(Astro.url.pathname, Astro.site);
 ---
 
@@ -26,7 +28,59 @@ const canonicalURL = new URL(Astro.url.pathname, Astro.site);
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@ibm/plex-sans-sc@1.1.0/fonts/split/woff2/hinted/IBMPlexSansSC-Bold.css" />
 
   <!-- Primary Meta Tags -->
-  <title>{title}</title>
+  <title data-title-zh={titleZh} data-title-en={titleEn}>{title}</title>
+  <script is:inline>
+    (() => {
+      const readLang = () => {
+        try {
+          return localStorage.getItem('lang') === 'en' ? 'en' : 'zh';
+        } catch {
+          return 'zh';
+        }
+      };
+
+      const applyLang = (lang, emit = false) => {
+        const prev = document.documentElement.dataset.lang;
+        document.documentElement.dataset.lang = lang;
+        document.documentElement.lang = lang === 'en' ? 'en' : 'zh-CN';
+
+        const titleEl = document.querySelector('title');
+        if (titleEl) {
+          const nextTitle = lang === 'en' ? titleEl.dataset.titleEn : titleEl.dataset.titleZh;
+          if (nextTitle) {
+            document.title = nextTitle;
+          }
+        }
+
+        if (emit && prev !== lang) {
+          window.dispatchEvent(new CustomEvent('langchange', { detail: { lang } }));
+        }
+      };
+
+      applyLang(readLang());
+
+      window.addEventListener('pageshow', () => {
+        applyLang(readLang(), true);
+      });
+
+      window.addEventListener('storage', (event) => {
+        if (event.key === 'lang') {
+          applyLang(event.newValue === 'en' ? 'en' : 'zh', true);
+        }
+      });
+
+      window.addEventListener('langchange', (event) => {
+        const lang = event.detail?.lang === 'en' ? 'en' : 'zh';
+        const titleEl = document.querySelector('title');
+        if (titleEl) {
+          const nextTitle = lang === 'en' ? titleEl.dataset.titleEn : titleEl.dataset.titleZh;
+          if (nextTitle) {
+            document.title = nextTitle;
+          }
+        }
+      });
+    })();
+  </script>
   <meta name="description" content={description} />
   <link rel="canonical" href={canonicalURL} />
 
