@@ -51,6 +51,14 @@
   text-wrap-style: pretty;
 }
 
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}
+
 ::selection {
   background-color: light-dark(var(--color-sky-medium), var(--color-klein-light));
 }

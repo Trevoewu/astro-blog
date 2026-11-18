@@ -1,0 +1,352 @@
+---
+title: "Robust Yet Stubborn: Why Advisor-Guided Zero-Shot Slot Filling Stalls on Annotation Conventions"
+pubDate: 2026-11-17 19:00:00
+description: "Why source-trained open-weight extractors override valid advice from frontier LLM advisors, what can be fixed without target labels, and how 1–3 confirmations per conflict pair settle the rest."
+slug: robust-yet-stubborn-slot-filling
+published: true
+---
+
+import SnipsTrajectory from "../../components/charts/SnipsTrajectory.astro";
+import AdapterDial from "../../components/charts/AdapterDial.astro";
+
+## Abstract
+
+Zero-shot cross-domain slot filling faces a sharp asymmetry between two model classes. Frontier black-box large language models (LLMs) generalize broadly to unseen slots, yet they make frequent boundary errors and cannot be fine-tuned locally. Conversely, compact open-weight models can be fine-tuned to enforce strict span boundaries and output formatting, yet they lack broad coverage on unseen slots. **Advisor-guided slot filling** bridges this gap by pairing a frozen black-box LLM *advisor* with a source-trained open-weight *extractor*. Yet even when the advisor supplies an exact gold span on an unseen slot, the fine-tuned extractor frequently overrides it.
+
+We study why this happens across SNIPS and ATIS and establish three findings. First, source fine-tuning makes the extractor stubborn very early in training, long before it finishes learning to reject noisy advice. This drop happens even on slot names the model already knows, so it is not caused by unfamiliarity with new slots. Second, these overrides are not random mistakes on rare slots. In ATIS, the extractor moves valid advisor spans into more general slots; in SNIPS, it repeatedly rejects a few common words—such as `"my"` for `playlist_owner`—because source training always left those words unlabeled. Third, this split explains what can and cannot be fixed without target labels. A simple slot-name check stops wrong-slot copying on ATIS with zero target labels, whereas no label-free method can tell whether a disputed word like `"my"` is valid under a new dataset's rules. Checking just one to three examples for each recurring disagreement settles those rules cleanly and avoids the heavy side effects of few-shot fine-tuning.
+
+---
+
+## 1. Introduction
+
+Zero-shot cross-domain slot filling extracts target-domain slot values from user utterances without labeled target training data ([Liu et al., 2020](#ref-liu-2020); [Yu et al., 2021](#ref-yu-2021)). In practice, practitioners face a sharp trade-off between two classes of models. **Frontier black-box large language models (LLMs)** generalize broadly to unseen target slots, yet they cannot be fine-tuned locally and often produce loose span boundaries when prompted directly. Conversely, **compact open-weight LLMs** can be fine-tuned cheaply on source domains to enforce strict span boundaries and output formatting, yet they lack broad coverage on unfamiliar target slots.
+
+**Advisor-guided extraction** combines both strengths through a simple division of labor:
+
+- The **advisor** is a frozen, black-box frontier LLM that reads the utterance and target schema to propose candidate spans for each slot. Because the advisor is never modified, it can be swapped freely across model providers.
+- The **extractor** is a compact, open-weight LLM fine-tuned on source-domain data to make the final prediction from the utterance, schema, and the advisor's suggestions.
+
+Across cross-domain benchmarks and advisor models, this hybrid setup consistently outperforms running either model alone.
+
+Yet this division of labor creates an unexpected puzzle. Given the same advisor suggestions, an untuned base model is **controllable but gullible**: it accepts nearly all valid advice, but it also copies most of the advisor's mistakes. Fine-tuning on source domains flips the extractor into a **robust yet stubborn** state. It learns to filter out noisy advice, but it also begins overriding the advisor—even when the advisor supplies the exact gold span on an unseen slot.
+
+This stubbornness shows up in two concrete ways. On SNIPS, the tuned extractor repeatedly drops valid words that clash with source-domain habits. In *"add this track to my global funk"*, for instance, `"my"` is the gold value for `playlist_owner`. Other SNIPS domains leave `"my"` unlabeled, so source training teaches the extractor to ignore it. At test time, the untuned base model accepts the advisor's suggestion `playlist_owner="my"` every time, whereas the source-tuned extractor rejects it every time. On ATIS, a second pattern appears: instead of dropping a valid advisor span, the tuned extractor moves it from a specific role slot (such as `fromloc.city_name`) into a generic slot (such as `city_name`).
+
+Why does source fine-tuning make an extractor override valid advice, and when can we fix it without target labels? To track this shift, Section 2 measures two behaviors (adapting [Li et al., 2022](#ref-li-2022); [Goyal et al., 2025](#ref-goyal-2025)): **conflict controllability** ($\mathcal{C}_{\mathrm{conf}}$), how often the extractor accepts valid advice when its own prediction is wrong, and **strict noise robustness** ($\mathcal{R}$), how often it keeps a correct prediction when the advice is wrong. Our study answers the question in three steps:
+
+- **Stubbornness sets in early and is not caused by unfamiliar slot names (Section 3).** The extractor's willingness to follow conflicting advice drops within the first 200 training steps, long before noise rejection finishes improving. Scaling down the fine-tuned weights at inference time offers no middle ground where both behaviors stay strong. This drop happens equally on familiar and unfamiliar slots, and neither explicitly marking unseen slots nor selectively routing uncertain predictions makes the extractor defer to the advisor.
+- **Overrides concentrate on a few recurring pairs taught by source training (Section 4).** Most conflicts are not random errors on rare slots; they repeat on a small set of slot-and-word pairs. In SNIPS, words like `"my"`, `"this"`, and `"here"` appear hundreds of times in source training with *zero* gold labels, teaching the extractor to reject them on sight. Swapping `"my"` for an ordinary name, or patching in a single late layer from the untuned base model, immediately restores compliance. Fine-tuning thus installs a targeted word-refusal habit rather than breaking the model's ability to use advice.
+- **Wrong-slot copying can be fixed without labels, whereas word conventions need a few human confirmations (Sections 5–6).** Because ATIS wrong-slot copying moves spans between slots with the same base name (such as `fromloc.city_name` and `city_name`), a simple rule that routes hijacked spans back to the advisor's slot fixes it without target labels and without hurting SNIPS. By contrast, no label-free method—not even stronger LLM judges—can fix word omissions like `playlist_owner="my"`, because slot names alone do not reveal which words a dataset counts as valid. However, because these disputes repeat on a few pairs, asking an annotator to confirm just one to three examples per pair settles the rule cleanly and avoids the heavy side effects of few-shot fine-tuning.
+
+---
+
+## 2. Experimental Setup
+
+### 2.1 Task, Benchmarks, and Models
+
+#### Task and Slot Partition
+
+An open-weight extractor $E_\theta$ is trained on labeled source domains with slot vocabulary $\mathcal{S}_{\mathrm{src}}$ and evaluated on a held-out target domain with schema $S = (s_1, \dots, s_m)$. Each slot $s_j$ has a canonical name and a brief description. Target slots split into **source-seen slots** ($S_{\mathrm{seen}} = S \cap \mathcal{S}_{\mathrm{src}}$) and **unseen target slots** ($S_{\mathrm{unseen}} = S \setminus \mathcal{S}_{\mathrm{src}}$). Given an utterance $x$ and schema $S$, $E_\theta$ predicts $\hat{y} = (\hat{y}_1, \dots, \hat{y}_m)$, where each $\hat{y}_j$ is either verbatim substring(s) from $x$ or `NONE`.
+
+#### Benchmarks
+
+We evaluate on two English benchmarks:
+
+- **SNIPS** ([Coucke et al., 2018](#ref-coucke-2018)): A spoken-language understanding benchmark spanning seven everyday voice-assistant domains (such as music, weather, restaurants, and media search). We follow the leave-one-domain-out setup ([Liu et al., 2020](#ref-liu-2020)), where six domains serve as source training data and the held-out domain is the target. Because several flat slot names recur across domains, each target fold mixes source-seen slots ($S_{\mathrm{seen}}$) with domain-specific unseen slots ($S_{\mathrm{unseen}}$).
+- **SNIPS-to-ATIS** ([Hemphill et al., 1990](#ref-hemphill-1990)): A cross-dataset transfer setting where extractors trained on SNIPS are evaluated zero-shot on ATIS, a benchmark of airline travel and flight-booking queries. ATIS shares no slot names with SNIPS, placing every target slot in $S_{\mathrm{unseen}}$.
+
+#### Frozen Advisors and Source-Tuned Extractor
+
+At inference time, a frozen LLM *advisor* reads the utterance and target schema to propose candidate slot values, while the source-trained *extractor* $E_\theta$ conditions on those suggestions to produce the final prediction. To evaluate the extractor on its own (`Solo` mode), we run it without external advisor guidance.
+
+We evaluate four frozen advisors spanning multiple model families, with `DeepSeek-V4-Flash` serving as our primary advisor. Unless noted otherwise, the extractor $E_\theta$ is a `Qwen3-8B` model ([Yang et al., 2025](#ref-yang-2025)) fine-tuned on source-domain utterances via LoRA across three random seeds.
+
+### 2.2 Separating Controllability from Noise Robustness
+
+For each slot $s_j$ with gold label $y_j$, let $\hat{y}^{\mathrm{solo}}_j$ and $\hat{y}_j$ denote the extractor's solo and advised predictions, and let $a_j$ denote the advisor's suggestion for slot $s_j$ (either a proposed candidate span or `NONE`). We call a suggestion *correct* if it matches the gold label ($a_j = y_j$), and *wrong* otherwise. This divides advised predictions into the four cases in Table 1.
+
+|                  | **Advice correct**                                       | **Advice wrong**                 |
+| :--------------- | :------------------------------------------------------- | :------------------------------- |
+| **Solo correct** | Agreement preservation                                   | Noise robustness ($\mathcal{R}$) |
+| **Solo wrong**   | Conflict controllability ($\mathcal{C}_{\mathrm{conf}}$) | Both-wrong recovery              |
+
+*Table 1: Four-cell breakdown of advisor–extractor interaction on a single slot. Off-diagonal conflict cells isolate conflict controllability ($\mathcal{C}_{\mathrm{conf}}$) and strict noise robustness ($\mathcal{R}$), while diagonal cells measure agreement preservation and both-wrong recovery.*
+
+Adapting [Li et al. (2022)](#ref-li-2022), we focus on the two off-diagonal conflict behaviors:
+
+$$
+\mathcal{C}_{\mathrm{conf}} = \Pr\bigl(\hat{y}_j = y_j \;\big|\; \hat{y}^{\mathrm{solo}}_j \neq y_j,\; a_j = y_j\bigr) \tag{1}
+$$
+
+$$
+\mathcal{R} = \Pr\bigl(\hat{y}_j = y_j \;\big|\; \hat{y}^{\mathrm{solo}}_j = y_j,\; a_j \neq y_j\bigr) \tag{2}
+$$
+
+On the two diagonal cells, the untuned base model and the fine-tuned extractor behave almost identically: when `Solo` and the advisor agree on a correct answer (**agreement preservation**), both models keep it over 99% of the time; when both are wrong (**both-wrong recovery**), neither model recovers often ($<7\%$). Because source fine-tuning leaves the diagonal cells essentially unchanged, the behavioral shift happens almost entirely when the extractor and advisor disagree.
+
+---
+
+## 3. The Stubbornness Paradox and What Does Not Explain It
+
+Why does source fine-tuning make the extractor override valid advice? We test—and rule out—three natural explanations:
+
+- **Is fine-tuning simply pushed too far?** Can we find a middle ground—either by stopping training early or by scaling down the LoRA weight at inference time—where the model rejects noise without overriding valid advice?
+- **Does unfamiliarity with new slot names keep the model from judging advice?** When a target slot is unseen, does the extractor lack the knowledge to tell whether the advisor's suggestion is valid—and would explicitly marking unseen slots teach it to defer?
+- **Should we query the advisor selectively?** Does routing only uncertain predictions avoid stubborn overrides?
+
+### 3.1 No "Sweet Spot" in Fine-Tuning Strength
+
+If stubbornness came from pushing fine-tuning too far, moderating its strength—either by stopping training early or by dialing back the LoRA adapter weight at inference time—should catch a middle ground. Testing both axes shows that no such sweet spot exists: stubbornness sets in well before noise rejection matures.
+
+<SnipsTrajectory />
+
+*Figure 1: Conflict controllability ($\mathcal{C}_{\mathrm{conf}}$) and noise robustness ($\mathcal{R}$) across fine-tuning steps on SNIPS. Willingness to accept conflicting advice collapses early in training on both seen and unseen slots, long before noise rejection plateaus.*
+
+**Stopping early in training.** Figure 1 tracks conflict controllability ($\mathcal{C}_{\mathrm{conf}}$) and strict noise robustness ($\mathcal{R}$) across training checkpoints on SNIPS. Between steps 100 and 200—at the very start of fine-tuning—$\mathcal{C}_{\mathrm{conf}}$ plunges from 65.3% to 41.0% and stays flat for the rest of training, while noise robustness $\mathcal{R}$ is still climbing toward its plateau. Crucially, this early drop holds even on a fixed set of conflict instances across all checkpoints (confirming it is not an artifact of `Solo` accuracy improving over time) and happens in lockstep on both **source-seen slots** and **unseen target slots**. Rather than slowly overfitting late in training, supervised fine-tuning triggers an immediate shift toward trusting internal parameters over external advice, mirroring context-parametric inversion in instruction tuning ([Goyal et al., 2025](#ref-goyal-2025)).
+
+<AdapterDial />
+
+*Figure 2: Scaling the LoRA adapter weight $\lambda$ from $0$ (untuned base) to $1$ (full adapter) at inference time. Across both benchmarks, conflict controllability ($\mathcal{C}_{\mathrm{conf}}$) drops sharply as $\lambda$ increases, leaving no scale where both controllability and noise robustness ($\mathcal{R}$) remain high.*
+
+**Scaling down adapter weights at inference time.** A natural alternative is to train the extractor fully, then dial back its LoRA adapter weight $\lambda \in [0, 1]$ at inference time to blend the untuned base model ($\lambda = 0$) with the fine-tuned extractor ($\lambda = 1$). Figure 2 shows that this runs into the exact same trade-off. On SNIPS, keeping the adapter weak ($\lambda \le 0.25$) preserves high controllability ($\mathcal{C}_{\mathrm{conf}} \ge 85.2\%$), but leaves noise robustness too low to filter out bad advice ($\mathcal{R} \le 30.2\%$). Pushing $\lambda$ from $0.25$ to $1.0$ raises noise robustness to $89.0\%$, but steadily erodes conflict controllability down to $49.4\%$. The same tension holds on ATIS: as $\lambda$ increases from $0.5$ to $1.0$, noise robustness climbs from $27.8\%$ to $69.6\%$, while controllability drops from $91.7\%$ to $57.4\%$—pulling advised F1 down from $71.44$ to $66.68$. Neither stopping training early nor weakening the adapter at inference time offers a sweet spot that separates noise rejection from stubbornness.
+
+### 3.2 Unfamiliar Slot Names Are Not the Cause
+
+Another natural hypothesis is that on unseen target slots, the extractor does not know the new slot names well enough to judge the advisor's suggestion, and would defer to the advisor if explicitly told which slots are unfamiliar. Because a slot marker never seen during training would be meaningless at test time, we tested this by dropping 10 source-domain slots from nearly all training schemas—retaining only a small number of exposures tagged as `[new]` while marking all fully trained slots as `[familiar]`—and then applying the `[new]` marker to truly unseen target slots at test time.
+
+If unfamiliarity with slot names drove stubbornness, the extractor should struggle on those exposure-starved slots when run alone (`Solo`) and defer to the advisor when given the `[new]` marker on unseen target slots. Neither holds:
+- **Slot names alone are already easy to read:** By step 50—after seeing an average of just ~2 positive examples per held-out slot—`Solo` accuracy on those 10 slots already reaches **87%** (and exceeds **95%** by convergence), showing that the pretrained model understands standard slot names almost immediately once it learns the output format.
+- **Explicit unfamiliarity markers do not cure stubbornness:** On truly unseen target slots at test time, adding the `[new]` marker barely moves conflict controllability ($+2.1$ points over an untagged control), fails to fix `playlist_owner="my"` refusal (**2.5%** compliance), and lowers noise robustness on new slots by **17 points**.
+
+The extractor does not override the advisor because new slot names are opaque; it overrides the advisor when its learned source priors actively oppose the suggested span.
+
+### 3.3 Uncertainty Routing Improves Efficiency, Not Stubbornness
+
+| Routing Policy (Query Budget) |    F1 | Fixed | Broken |
+| :---------------------------- | ----: | ----: | -----: |
+| `Solo` (0%)                   | 75.05 |     0 |      0 |
+| Full advice (100%)            | 79.39 |   214 |     87 |
+| Oracle routing (10%)          | 79.44 |   136 |      0 |
+| Oracle routing (25%)          | 80.00 |   195 |     11 |
+| Token confidence (10%)        | 76.27 |    67 |     30 |
+| Token confidence (25%)        | 77.34 |     — |      — |
+| Token confidence (50%)        | 77.40 |     — |      — |
+| Unseen-first (50%)            | 78.24 |   138 |     33 |
+
+*Table 2: Selective advisor routing on SNIPS. Ranking slots by output token confidence (or an oracle router) reduces advisor query cost, but cannot cure stubbornness when the extractor is confidently wrong.*
+
+Finally, could we avoid conflicts at inference time by querying the advisor *only* when the extractor is uncertain? Table 2 shows that while output token confidence is useful for ranking which slots to query—and an oracle router querying just 10%–25% of slots matches full-advice F1 at a fraction of the query cost—routing is purely an efficiency tool, not a cure for stubbornness.
+
+Even when an oracle router queries the advisor, the extractor still rejects nearly a third of the valid gold corrections it receives. When source priors oppose a target convention—such as rejecting `"my"` on `AddToPlaylist`—the extractor is *highly confident* in its `NONE` prediction, so querying the advisor fails to change its output.
+
+---
+
+## 4. What the Extractor Rejects: Two Mechanisms of Stubbornness
+
+Having ruled out fine-tuning strength, unfamiliar slot names, and selective routing, we now open the black box of the overridden predictions. When the source-tuned extractor overrides valid advice, what is it actually doing? Inspecting the conflicts across ATIS and SNIPS reveals that stubbornness is not random noise scattered across rare utterances. Instead, it splits into **two systematic patterns** taught by source training: moving valid spans into generic fallback slots on hierarchical schemas, and rejecting a small set of recurring words on flat schemas.
+
+### 4.1 Two Conflict Patterns: Slot Reassignment vs. Clustered Word Omission
+
+Comparing overridden predictions across our two benchmarks exposes two distinct failure modes:
+
+1. **Schema-bias slot reassignment (ATIS):** On ATIS, where target slots form hierarchies that qualify generic concepts by role (such as `fromloc.city_name` and `toloc.city_name` alongside bare `city_name`), the tuned extractor rarely deletes the advisor's span outright. Instead, it moves the span to a less specific slot: **91.6% of all entities lost** when overriding the advisor immediately reappear under another slot name, almost always shifting from a role-qualified slot into its generic base slot.
+2. **Clustered word omission (SNIPS and residual ATIS):** On SNIPS, where slot names are flat, the extractor instead overrides valid advisor spans by outputting `NONE`. Crucially, these omissions concentrate heavily on a few recurring `(slot, span)` pairs where datasets disagree on annotation boundaries—such as whether a possessive pronoun (`"my"`) counts as a `playlist_owner`, whether a deictic determiner (`"this"`) fills `object_select`, or whether `"here"` fills `current_location`. Just **52 recurring clusters** account for **66.9%** of all conflicts across SNIPS. Similarly, among the remaining ATIS conflicts that are not slot reassignments, just **five recurring word pairs**—such as (`depart_time.time_relative`, `"after"`) and (`flight`, `"flight"`)—account for **69%** of all recoverable F1 gain.
+
+### 4.2 Source Training Actively Teaches the Opposite Rule
+
+| Target Slot        | Span     | Source Occurrences (Gold Labels) | Target Validation Gold Rate |
+| :----------------- | :------- | -------------------------------: | --------------------------: |
+| `playlist_owner`   | `"my"`   |                     375 (0 gold) |             99.2% (119/120) |
+| `object_select`    | `"this"` |                     624 (0 gold) |             97.2% (106/109) |
+| `current_location` | `"here"` |                      65 (0 gold) |               95.2% (20/21) |
+
+*Table 3: Source-training frequency versus target-domain gold rate for representative SNIPS conflict pairs. The extractor saw these exact words hundreds of times in source domains with zero gold labels, learning a strong negative prior that directly contradicts the target domain's annotation convention.*
+
+Why does the fine-tuned extractor refuse these specific words so stubbornly? Counting how often these exact words appeared in the six SNIPS source-training domains reveals that the extractor is not unfamiliar with them—it was repeatedly trained to leave them unlabeled (Table 3).
+
+When training the extractor for the held-out `AddToPlaylist` domain, the word `"my"` appears **375 times** across source training utterances with **0** gold slot labels. Source fine-tuning therefore teaches a strict negative rule: whenever `"my"` appears in an utterance, leave it out. At test time on `AddToPlaylist`, where `"my"` is the gold span for `playlist_owner` **99.2%** of the time, this learned rule collides head-on with the target convention: the untuned base model accepts `playlist_owner="my"` 100% of the time, whereas the source-tuned extractor accepts it **0%** of the time. The exact same contradiction explains why the extractor refuses `"this"` for `object_select` and `"here"` for `current_location` (Table 3).
+
+### 4.3 Mechanistic Localization: A Late-Layer Lexical Veto, Not a Broken Circuit
+
+Does source fine-tuning break the extractor's general ability to copy advice on slots like `playlist_owner`, or does it install a narrow veto against specific words? Both the training trajectory and internal model activations point to a localized lexical veto:
+
+- **Competitive oscillation during training:** Tracking `playlist_owner="my"` across checkpoints shows that the extractor does not forget `"my"` smoothly. Instead, compliance oscillates between 0% and over 50% across early checkpoints as negative source supervision competes with the base model's prior, before locking into 0% compliance in the second half of training.
+- **Counterfactual word substitution:** At convergence, the source-tuned extractor assigns `"my"` as its top-1 next token on **0%** of conflict prompts. Yet if we keep the exact same utterance, slot name, and advisor suggestion format and simply replace the word `"my"` with an ordinary name (`"daphne s"`), the tuned extractor immediately resumes following the advisor, raising top-1 acceptance from 0% back to **56%–96%**. The model's advice-following circuit is intact; only the word `"my"` is blocked.
+- **Single-layer activation patching:** Patching the residual-stream activation from a single late layer (layer 34 of 36) of the untuned base model into the source-tuned extractor at the target slot token restores `"my"` as the top-1 prediction in **95%–99%** of cases. Source fine-tuning thus acts as a localized late-layer gate that vetoes specific words penalized during source training.
+
+---
+
+## 5. What Can and Cannot Be Fixed Without Target Labels
+
+Having traced stubbornness to two mechanisms—wrong-slot copying across hierarchical slot names and localized word vetoes on recurring `(slot, span)` pairs—we now ask what can be recovered strictly without target-domain labels. Comparing the two failure modes reveals a sharp boundary: **wrong-slot copying can be repaired deterministically from schema slot names alone, whereas word-level convention disputes cannot be resolved safely by any label-free method.**
+
+### 5.1 Fixing Wrong-Slot Copying Without Labels: The Same-Family Span-Binding Gate
+
+On hierarchical schemas such as ATIS, role-qualified slots and generic fallback slots share the same base name after the final dot (for example, `fromloc.city_name` and `city_name` both end in `city_name`). Because this structural relationship is visible directly in the schema, we can repair wrong-slot copying at inference time without target labels or retraining.
+
+Whenever the extractor outputs a span $v$ on a slot $s_k$ where the advisor proposed nothing, while leaving empty (`NONE`) a distinct slot $s_j$ from the same base-name family where the advisor *did* propose $v$, the **Same-Family Span-Binding Gate** blocks the hijacked copy on $s_k$ and routes $v$ back to the advisor's slot $s_j$.
+
+| Gate Variant             |   ATIS F1 | SNIPS (`V4-Flash`) | SNIPS (`V3.2`) | SNIPS (`Qwen-27B`) |
+| :----------------------- | --------: | -----------------: | -------------: | -----------------: |
+| Base extractor (+Adv.)   |     66.91 |              79.69 |          78.60 |              79.68 |
+| Raw advisor suggestions  |     77.60 |                  — |              — |                  — |
+| Block hijack only        |     75.79 |                  — |              — |                  — |
+| Full Bind (unrestricted) |     81.10 |              78.47 |          76.64 |              77.53 |
+| Family + Drop            |     81.94 |              77.19 |          75.72 |              75.93 |
+| **Same-Family Bind**     | **78.46** |          **79.69** |      **78.60** |          **79.68** |
+
+*Table 4: Span-Binding Gate variants on ATIS and cross-domain safety check on SNIPS across three advisors. Only Same-Family Bind recovers ATIS performance above raw advisor suggestions while guaranteeing zero side effects on flat schemas like SNIPS.*
+
+Table 4 demonstrates two key properties of this structural gate:
+
+1. **Large zero-label recovery on hierarchical schemas:** On ATIS, Same-Family Span-Binding lifts advised F1 by **+11.55 points**, surpassing the raw advisor's standalone F1 (77.60). Across held-out validation splits, multi-seed evaluation sets, and four different advisors, the same unchanged rule improves every single run by **$+9.4$ to $+21.7$ F1**.
+2. **Why the same-family restriction is essential:** Rebinding spans between *any* pair of slots (`Full Bind` or `Family + Drop`) pushes ATIS F1 even higher, but only by overfitting ATIS's hierarchy. When applied to a flat schema like SNIPS, unconstrained rebinding degrades F1 across every advisor (Table 4). Restricting rebinding to slots that share the same base name preserves the ATIS recovery while guaranteeing **zero side effects (0.00 $\Delta$F1)** on flat schemas.
+
+### 5.2 Why Zero-Label Methods Fail on Word Conventions
+
+Can we also resolve clustered word omissions—such as `playlist_owner="my"` or `object_select="this"` on SNIPS—without target labels? We tested both blanket cluster rules and external zero-label judges, and found that every label-free approach fails for a fundamental structural reason.
+
+| Zero-Label Method                  | SNIPS $\Delta$F1 | SNIPS Fixed : Harmed | Fix:Harm Ratio | ATIS $\Delta$F1 | ATIS Fix:Harm Ratio |
+| :--------------------------------- | ---------------: | -------------------: | -------------: | --------------: | ------------------: |
+| `V-always` (all conflict clusters) |          $-2.77$ |    1,996.7 : 4,939.7 |         0.40:1 |         $-2.14$ |              0.16:1 |
+| `V-always` (span clusters only)    |          $+0.74$ |    1,129.0 : 1,050.7 |         1.07:1 |               — |                   — |
+| `V-vote` (advisor majority vote)   |          $+0.98$ |        923.3 : 632.3 |         1.46:1 |               — |                   — |
+| `J-self` (`DeepSeek-V4-Flash`)     |          $+0.02$ |      942.0 : 1,367.3 |         0.69:1 |         $-1.22$ |              0.23:1 |
+| `J-cross-glm` (`GLM-5.3-Flash`)    |          $+0.97$ |      1,022.0 : 778.7 |         1.31:1 |         $-2.14$ |              0.16:1 |
+| `J-cross-haiku` (`Claude-Haiku`)   |          $+1.69$ |      1,167.3 : 513.7 |         2.27:1 |         $+1.23$ |              2.11:1 |
+| `B` (untuned base `Qwen3-8B`)      |          $+0.00$ |        441.3 : 666.3 |         0.66:1 |         $+2.19$ |             11.08:1 |
+| `L` (source-domain gold lookup)    |          $-0.12$ |        193.0 : 212.7 |         0.91:1 |         $-0.63$ |              1.05:1 |
+| `E` (multi-source ensemble)        |          $-0.13$ |        387.3 : 659.0 |         0.59:1 |         $+1.14$ |              5.46:1 |
+
+*Table 5: Zero-label attempts to resolve recurring conflict clusters on SNIPS and ATIS. Because recurring conflicts mix valid target conventions with systematic advisor mistakes, neither blanket rules (`V-always`, `V-vote`) nor zero-label LLM judges can separate them safely.*
+
+#### Why Blanket Cluster Overrides Fail
+
+Since word conflicts concentrate in a few recurring `(slot, span)` clusters, why not simply force the extractor to follow the advisor whenever a conflict falls into one of those frequent clusters (`V-always` or majority-vote `V-vote`)? As Table 5 shows, blindly trusting all recurring conflict clusters lowers F1 by **$-2.77$** on SNIPS and **$-2.14$** on ATIS; even restricting `V-always` to the 23 recurring `(slot, span)` pairs on SNIPS harms nearly as many predictions as it fixes ($1.07:1$).
+
+Blanket rules fail because **recurring conflict clusters contain both genuine target conventions and recurring advisor hallucinations.** Alongside valid conventions like `playlist_owner="my"` and `object_select="this"`, the advisor also repeatedly proposes invalid generic words—such as tagging `"weather"` for `condition_description` or `"restaurant"` for `restaurant_type` on SNIPS—which the source-tuned extractor rightly rejects.
+
+#### Why External LLM Judges and Priors Also Fail
+
+Could an external LLM judge inspect each recurring `(slot, span)` cluster alongside the schema description and decide whether the span should be accepted? We evaluated five label-free verdict sources: asking the advisor model itself (`J-self`), querying two cross-family LLM judges (`GLM-5.3-Flash` and `Claude-Haiku-5-5`), querying the untuned base model (`B`), checking whether the word was ever labeled in source domains (`L`), and taking a conservative ensemble (`E`).
+
+As shown in Table 5, every label-free source fails on SNIPS for a clear structural reason:
+
+- **LLM judges default to accepting plausible words:** Both `J-self` and `J-cross-glm` approve almost every recurring cluster. Even the strongest judge, `Claude-Haiku-5-5`, marks 18 of 23 SNIPS clusters as valid, harming over 500 predictions (a 2.27:1 fix-to-harm ratio). Given only a brief slot description like `"owner"` for `playlist_owner` or `"weather"` for `condition_description`, no LLM can know which plausible English words an annotation team decided to include or exclude.
+- **Base priors and source lookup fail in the opposite direction:** When queried as a zero-shot judge, the untuned base model (`B`) defaults to rejecting 20 of 23 SNIPS clusters, while source-training lookup (`L`) actively rejects valid target conventions like `"my"`, `"this"`, and `"here"` because they never appeared as gold spans in the source domains.
+
+In short, **word-level annotation conventions represent an identifiability gap, not a reasoning gap.** Without target-domain examples, no zero-label method can determine which side of a boundary convention a dataset follows.
+
+---
+
+## 6. Settling Convention Disputes with Minimal Human Confirmations
+
+If zero-label methods fail because dataset-specific word conventions cannot be guessed from slot names alone, how much target supervision is actually needed? Because conflicts concentrate heavily on a small set of recurring `(slot, span)` pairs, resolving this ambiguity does not require labeling hundreds of utterances or retraining the extractor. Asking an annotator just **one to three binary (`yes`/`no`) confirmations per recurring conflict pair** recovers virtually the entire convention ceiling—while avoiding the heavy side effects of few-shot fine-tuning.
+
+### 6.1 One to Three Binary Confirmations per Cluster Recover the Oracle Ceiling
+
+| Dataset | Resolution Method                        | Binary Answers |   $\Delta$F1 | Fixed : Harmed | Fix:Harm Ratio |
+| :------ | :--------------------------------------- | -------------: | -----------: | -------------: | -------------: |
+| SNIPS   | `B-slot` (slot-level confirmation)       |             69 |      $+0.32$ |              — |              — |
+| SNIPS   | `B-rand` (random conflict confirmation)  |             69 |      $+1.54$ |              — |              — |
+| SNIPS   | **`V-k1` (1 confirmation / cluster)**    |         **23** |  **$+2.47$** |              — |     **54.9:1** |
+| SNIPS   | **`V-k3` (3 confirmations / cluster)**   |         **69** |  **$+2.50$** | 1,182.5 : 16.7 |     **71.0:1** |
+| SNIPS   | `V-oracle` (all 1,088 cluster instances) |          1,088 |      $+2.50$ |              — |              — |
+| ATIS    | `V-k1` (ungated, 1 / cluster)            |            ~10 |      $+2.58$ |   639.3 : 29.9 |         21.4:1 |
+| ATIS    | `V-k3` (ungated, 3 / cluster)            |             29 |      $+2.78$ |   647.6 : 11.8 |         55.0:1 |
+| ATIS    | `Same-Family Gate` only                  |              0 |     $+13.03$ |              — |              — |
+| ATIS    | **`Same-Family Gate + V-k3`**            |         **29** | **$+15.49$** |    536.0 : 7.2 |     **74.9:1** |
+| ATIS    | `Same-Family Gate + V-oracle`            |              — |     $+15.53$ |    536.0 : 2.0 |        268.0:1 |
+
+*Table 6: Resolving recurring `(slot, span)` conflicts with 1–3 binary (`yes`/`no`) confirmations per cluster. A few dozen yes/no answers recover virtually 100% of the oracle cluster gain at $>50:1$ precision, and stack cleanly with the zero-label Same-Family Gate on ATIS.*
+
+Table 6 replaces the zero-label judges from Section 5.2 with $k=1$ (`V-k1`) or $k=3$ (`V-k3`) binary (`yes`/`no`) confirmations sampled from each recurring `(slot, span)` cluster:
+
+- **SNIPS:** Answering just three yes/no questions per cluster (`V-k3`, 69 binary answers across 23 clusters) lifts F1 by **+2.50 points** with a **71.0:1 fix-to-harm ratio**, matching the full 1,088-label cluster oracle (+2.50 F1). Even a single confirmation per cluster (`V-k1`, 23 answers total) already captures **+2.47 F1** at a **54.9:1** fix-to-harm ratio. Under the exact same 69-answer budget, grouping conflicts by `(slot, span)` cluster far outperforms confirming random conflict instances (`B-rand`, +1.54 F1) or assigning rules at the coarser slot level (`B-slot`, +0.32 F1)—an advantage that holds consistently across all tested advisors.
+- **ATIS:** Combining our two remedies—the zero-label Same-Family Span-Binding Gate for wrong-slot copying and 29 binary confirmations (`V-k3`) for word-level conflicts—lifts ATIS F1 by **+15.49 points** overall at a **74.9:1** fix-to-harm ratio, nearly matching the full cluster oracle (+15.53 F1).
+
+### 6.2 Propagating Confirmed Conventions Beyond Advisor Suggestions
+
+Once a recurring pair such as `playlist_owner="my"` is confirmed as a valid target convention, that rule does not need to stop at utterances where the advisor already proposed `"my"`. We can also propagate the confirmed span rule to target utterances where *both* the extractor and the advisor missed `"my"`. On SNIPS, propagating confirmed span conventions across utterances yields an additional **+1.53 F1** (reaching 83.71 F1 with 12 extra binary confirmations, at a 32.2:1 fix-to-harm ratio). On ATIS, where the advisor rarely omits recurring convention words, propagation leaves predictions unchanged.
+
+### 6.3 Surgical Calibration vs. Few-Shot Fine-Tuning
+
+A natural question is why a practitioner should confirm recurring conflict clusters rather than simply labeling a small set of target utterances and fine-tuning the extractor directly. To answer this, Table 7 compares cluster confirmation (with propagation, requiring 81 binary `yes`/`no` answers) against standard few-shot adaptation using 80 fully annotated target utterances on SNIPS.
+
+| Adaptation Approach (SNIPS)              | Annotation Effort                         |     F1 ($\Delta$F1) | Instances Fixed : Harmed | Fix:Harm Ratio |
+| :--------------------------------------- | :---------------------------------------- | ------------------: | -----------------------: | -------------: |
+| Base source-tuned extractor (+Adv.)      | 0 target labels                           |        79.52 (0.00) |                        — |              — |
+| Few-shot advisor prompting (80 utts)     | 605 slot checks + 238 exact spans         |     83.32 ($+3.80$) |              2,314 : 463 |         5.00:1 |
+| Few-shot extractor fine-tuning (80 utts) | 605 slot checks + 238 exact spans         |     85.88 ($+6.36$) |            5,382 : 2,753 |         1.95:1 |
+| **Cluster confirmation (81 yes/no)**     | **81 binary answers (0 span boundaries)** | **83.96 ($+4.44$)** |           **2,097 : 44** |    **47.66:1** |
+
+*Table 7: Cost–safety trade-off on SNIPS comparing 81 binary cluster confirmations against 80-utterance few-shot supervision. While few-shot extractor fine-tuning achieves a higher raw F1 by learning new non-conflict patterns, it requires far heavier annotation effort and breaks 2,753 previously correct predictions.*
+
+Fine-tuning the extractor on 80 fully labeled target utterances achieves a higher raw macro F1 (+6.36 vs. +4.44), because gradient updates over full utterances also teach the model new slot patterns outside the advisor-conflict clusters (most notably on a single domain, `SearchScreeningEvent`). However, examining what changes at the instance level reveals a sharp **cost–safety trade-off**:
+
+1. **Order-of-magnitude lower annotation effort:** Labeling 80 full utterances requires an annotator to check 605 slot-presence decisions and mark 238 exact character-level span boundaries. By contrast, cluster confirmation requires only **81 binary `yes`/`no` clicks** on pre-grouped candidate pairs and zero span-boundary annotations.
+2. **Avoiding severe collateral damage:** Cluster confirmation acts as a surgical patch: it fixes 2,097 slot predictions while harming only **44** across the entire benchmark (**47.7:1** fix-to-harm ratio). Few-shot fine-tuning, by contrast, modifies model weights globally—fixing 5,382 predictions but **breaking 2,753 previously correct predictions** (**1.95:1** fix-to-harm ratio). Nearly half of those regressions (1,333 instances) occur on source-seen slots that the extractor already handled well, and on domains with only a handful of sampled utterances, few-shot fine-tuning triggers severe slot-confusion cascades (such as swapping hundreds of `artist` and `playlist` spans into `entity_name` on `AddToPlaylist`, or lowering overall F1 below the zero-shot baseline on `SearchCreativeWork`). Even if we lock source-seen slots after fine-tuning, all 1,420 regressions on unseen target slots remain.
+
+When practitioners have enough labeled data and tolerance for retraining regressions, few-shot fine-tuning can push raw coverage higher. When the goal is to adapt an advisor-guided extractor **quickly, cheaply, and without breaking existing behavior**, confirming 1–3 examples per recurring conflict pair resolves convention stubbornness with near-zero collateral damage.
+
+---
+
+## 7. Limitations
+
+- **Terse schema descriptions.** Both SNIPS and ATIS provide short, 1–6 word slot descriptions (such as `"owner"` for `playlist_owner` or `"weather"` for `condition_description`). Writing richer, guideline-style slot definitions before deployment could reduce convention ambiguity upfront, although subtle dataset-specific boundary choices often still require empirical verification on real utterances.
+- **Benchmark and task scope.** Our experiments focus on two English single-turn slot-filling benchmarks—leave-one-domain-out transfer on SNIPS and cross-dataset transfer to ATIS. Extending this analysis to multilingual schemas and multi-turn dialogue state tracking benchmarks (such as MultiWOZ) remains an important direction for future work.
+- **Single extractor architecture.** Although we evaluate four frozen advisors and two external LLM judges spanning multiple model families, our fine-tuned extractor is always `Qwen3-8B`. Investigating how extractor scale or alternative fine-tuning objectives (such as context-aware regularization) shape the early controllability–robustness trade-off is left to future work.
+
+---
+
+## 8. Related Work
+
+- **Zero-shot cross-domain slot filling.** Early cross-domain slot filling transfers to unseen target domains by conditioning sequence taggers on slot descriptions ([Bapna et al., 2017](#ref-bapna-2017); [Lee & Jha, 2019](#ref-lee-2019)) or example values ([Shah et al., 2019](#ref-shah-2019)), with context-aware representations ([Siddique et al., 2021](#ref-siddique-2021)), decoupled span detection and typing ([Liu et al., 2020](#ref-liu-2020)), and contrastive slot sharpening ([He et al., 2020](#ref-he-2020); [Zhang & Zhang, 2023](#ref-zhang-2023)) improving generalization. Other formulations cast slot filling as question answering or machine reading comprehension ([Du et al., 2021](#ref-du-2021); [Yu et al., 2021](#ref-yu-2021); [Liu et al., 2022](#ref-liu-2022); [Liu et al., 2025](#ref-liu-2025)), generative prompting ([Yan et al., 2022](#ref-yan-2022); [Li et al., 2023](#ref-li-2023)), or retrieval-augmented demonstration matching ([Song et al., 2025](#ref-song-2025)). Prompted LLMs alone struggle with strict span boundaries compared to dialogue state tracking ([Pan et al., 2023](#ref-pan-2023)); staged prompting ([Zhu et al., 2024](#ref-zhu-2024)), instruction tuning ([Mirza et al., 2024](#ref-mirza-2024)), teacher distillation ([Rana et al., 2025](#ref-rana-2025)), and synthetic data generation ([Huang et al., 2025](#ref-huang-2025)) narrow this gap. In parallel, schema-driven dialogue modeling ([Rastogi et al., 2020](#ref-rastogi-2020); [Lin et al., 2021](#ref-lin-2021); [Zhao et al., 2022](#ref-zhao-2022)) establishes schema-conditioned interfaces for cross-domain extraction.
+- **Small–large model collaboration.** Recent work pairs compact extractors with larger LLMs in complementary roles. In GRSF ([Li et al., 2025](#ref-li-2025-grsf)), an LLM generates slot knowledge filtered by a trained evaluator for a small tagger; in SynAug ([Li et al., 2025](#ref-li-2025-synaug)) and SuperICL ([Xu et al., 2024](#ref-xu-2024)), a small model's predictions are injected into an LLM prompt that makes the final call. Other hybrids let a small model route uncertain intents to an LLM ([Chen & Wang, 2025](#ref-chen-2025)), learn question-generation strategies for zero-shot QA ([Tavares et al., 2023](#ref-tavares-2023)), follow an LLM guidance prefix ([Yao et al., 2024](#ref-yao-2024)), or use reinforcement learning to decide when a 7B NER model should invoke external search ([Chen et al., 2026](#ref-chen-2026)). Closest in terminology, [Asawa et al. (2026)](#ref-asawa-2026) train a small RL advisor to steer a frozen black-box LLM with free-form advice. Our setting reverses this asymmetry: a frozen LLM advisor provides candidate slot-level guidance to a source-trained 8B extractor, allowing us to isolate how supervised fine-tuning governs the extractor's willingness to follow or override external advice.
+- **Controllability, noise robustness, and context-parametric inversion.** Balancing external context against parametric priors is a central tension in conditional generation. [Li et al. (2022)](#ref-li-2022) formalize *controllability* (following counterfactual or conflicting context) versus *robustness* (ignoring irrelevant context) and propose Knowledge-Aware Fine-Tuning (KAFT) to preserve both. Similarly, RAFT ([Zhang et al., 2024](#ref-zhang-2024)) and [Yoran et al. (2024)](#ref-yoran-2024) train models on mixtures of oracle and distractor passages so retrieval-augmented generators ignore noisy context. However, [Goyal et al. (2025)](#ref-goyal-2025) show that instruction fine-tuning exhibits *context-parametric inversion*: context reliance rises early in training and then collapses as non-context-critical examples dominate gradient updates. We observe an analogous dynamic in advisor-guided slot filling: source SFT makes the extractor highly robust to noisy advice while collapsing controllability on conflicting spans, yielding a robust-yet-stubborn regime where both source-prior convention omissions and schema-bias slot reassignments emerge.
+- **Guideline refinement and interactive weak supervision.** Several recent frameworks address schema ambiguity through annotation guidelines or weak-supervision feedback. GoLLIE ([Sainz et al., 2024](#ref-sainz-2024)) trains IE models to follow detailed Python-formatted annotation guidelines, assuming those target guidelines are already authored and available in the prompt. DiZiNER ([Kim & Yoon, 2026](#ref-kim-2026)) simulates pilot annotation across multiple LLMs and refines zero-shot NER instructions from inter-model disagreements without target labels. Interactive weak supervision ([Boecking et al., 2021](#ref-boecking-2021)) queries human annotators on candidate labeling-function heuristics rather than individual examples. Our convention-conflict setting differs fundamentally from all three: target slot-filling schemas supply only brief descriptions without target-specific convention rules, inter-model disagreement cannot identify which convention a target benchmark actually follows (causing zero-label resolution to fail in Section 5.2), and minimal binary cluster-level verification resolves this identifiability gap with orders-of-magnitude fewer annotations than utterance-level few-shot fine-tuning (Section 6).
+
+---
+
+## References
+
+- <a id="ref-asawa-2026"></a>**Asawa et al. (2026).** Parth Asawa, Alan Zhu, Abby O'Neill, Matei Zaharia, Alexandros G. Dimakis, & Joseph E. Gonzalez. [How to Train Your Advisor: Steering Black-Box LLMs with Advisor Models](https://arxiv.org/abs/2510.02453). *ICML 2026 / arXiv:2510.02453*.
+- <a id="ref-bapna-2017"></a>**Bapna et al. (2017).** Ankur Bapna, Gökhan Tür, Dilek Hakkani-Tür, & Larry Heck. [Towards Zero-Shot Frame Semantic Parsing for Domain Scaling](https://doi.org/10.21437/Interspeech.2017-518). *Interspeech 2017*, pp. 2476–2480.
+- <a id="ref-boecking-2021"></a>**Boecking et al. (2021).** Benedikt Boecking, Willie Neiswanger, Eric Xing, & Artur Dubrawski. [Interactive Weak Supervision: Learning Useful Heuristics for Data Labeling](https://arxiv.org/abs/2012.06046). *ICLR 2021*.
+- <a id="ref-chen-2025"></a>**Chen & Wang (2025).** Small-model uncertainty routing for intent detection with LLMs *(2025)*.
+- <a id="ref-chen-2026"></a>**Chen et al. (2026).** Meixuan Chen, Hehan Li, Ruizhi Zhao, Xin Lu, Peizhi Xu, Liwei Qian, Meifang Li, Shuanglong Li, Hanmeng Liu, Xin Pei, & Yanbiao Ma. [NE-R1: Enhancing Named Entity Recognition Model via Reinforcement Learning](https://arxiv.org/abs/2609.02366). *EMNLP 2026 / arXiv:2609.02366*.
+- <a id="ref-coucke-2018"></a>**Coucke et al. (2018).** Alice Coucke, Alaa Saade, Adrien Ball, Théodore Bluche, Alexandre Caulier, David Leroy, Clément Doumouro, Thibault Gisselbrecht, Francesco Caltagirone, Thibaut Lavril, Maël Primet, & Joseph Dureau. [Snips Voice Platform: an embedded Spoken Language Understanding system for private-by-design voice interfaces](https://arxiv.org/abs/1805.10190). *arXiv:1805.10190*.
+- <a id="ref-du-2021"></a>**Du et al. (2021).** Xinya Du, Luheng He, Qi Li, Dian Yu, Panupong Pasupat, & Yuan Zhang. [QA-Driven Zero-shot Slot Filling with Weak Supervision Pretraining](https://aclanthology.org/2021.acl-short.83/). *ACL-IJCNLP 2021*, pp. 654–664.
+- <a id="ref-goyal-2025"></a>**Goyal et al. (2025).** Sachin Goyal, Christina Baek, J. Zico Kolter, & Aditi Raghunathan. [Context-Parametric Inversion: Why Instruction Finetuning Can Worsen Context Reliance](https://arxiv.org/abs/2410.10796). *ICLR 2025*.
+- <a id="ref-he-2020"></a>**He et al. (2020).** Keqing He, Jinchao Zhang, Yuanmeng Yan, Weiran Xu, Cheng Niu, & Jie Zhou. [Contrastive Zero-Shot Learning for Cross-Domain Slot Filling with Adversarial Attack](https://aclanthology.org/2020.coling-main.126/). *COLING 2020*.
+- <a id="ref-hemphill-1990"></a>**Hemphill et al. (1990).** Charles T. Hemphill, John J. Godfrey, & George R. Doddington. [The ATIS Spoken Language Systems Pilot Corpus](https://aclanthology.org/H90-1021/). *Speech and Natural Language Workshop 1990*.
+- <a id="ref-huang-2025"></a>**Huang et al. (2025).** Peijie Huang, Weizhen Li, Yuhong Xu, & Junbao Huang. Enhancing Cross-Domain Slot Filling with Joint LLM Data Generation and Data Curation. *ICASSP 2025*.
+- <a id="ref-kim-2026"></a>**Kim & Yoon (2026).** Siun Kim & Hyung-Jin Yoon. [DiZiNER: Disagreement-guided Instruction Refinement via Pilot Annotation Simulation for Zero-shot Named Entity Recognition](https://arxiv.org/abs/2604.15866). *ACL 2026 / arXiv:2604.15866*.
+- <a id="ref-lee-2019"></a>**Lee & Jha (2019).** Sungjin Lee & Rahul Jha. [Zero-Shot Adaptive Transfer for Conversational Language Understanding](https://doi.org/10.1609/aaai.v33i01.33016642). *AAAI 2019*, pp. 6642–6649.
+- <a id="ref-li-2022"></a>**Li et al. (2022).** Daliang Li, Ankit Singh Rawat, Manzil Zaheer, Xin Wang, Michal Lukasik, Andreas Veit, Felix X. Yu, & Sanjiv Kumar. [Large Language Models with Controllable Working Memory](https://arxiv.org/abs/2211.05110). *arXiv:2211.05110*.
+- <a id="ref-li-2023"></a>**Li et al. (2023).** Xuefeng Li, Liwen Wang, Guanting Dong, Keqing He, Jinzheng Zhao, Hao Lei, Jiachi Liu, & Weiran Xu. [Generative Zero-Shot Prompt Learning for Cross-Domain Slot Filling with Inverse Prompting](https://arxiv.org/abs/2307.02830). *Findings of ACL 2023*.
+- <a id="ref-li-2025-grsf"></a>**Li et al. (2025, GRSF).** Weizhen Li et al. [GRSF: Generating and Refining LLM Knowledge for Cross-Domain Zero-Shot Slot Filling](https://doi.org/10.1109/TASLPRO.2025.3597441). *IEEE TASLP 2025*.
+- <a id="ref-li-2025-synaug"></a>**Li et al. (2025, SynAug).** Weizhen Li, Junbao Huang, Peijie Huang, Yuhong Xu, & Jiekun Fan. [Synergistic Augmentation: Enhancing Cross-Domain Zero-Shot Slot Filling with Small Model-Assisted Large Language Models](https://aclanthology.org/2025.findings-acl.1097/). *Findings of ACL 2025*.
+- <a id="ref-lin-2021"></a>**Lin et al. (2021).** Zhaojiang Lin, Bing Liu, Seungwhan Moon, Paul Crook, Zhenpeng Zhou, Zhiguang Wang, Zhou Yu, Andrea Madotto, Eunjoon Cho, & Rajen Subba. [Leveraging Slot Descriptions for Zero-Shot Cross-Domain Dialogue State Tracking](https://aclanthology.org/2021.naacl-main.448/). *NAACL 2021*.
+- <a id="ref-liu-2020"></a>**Liu et al. (2020).** Zihan Liu, Genta Indra Winata, Peng Xu, & Pascale Fung. [Coach: A Coarse-to-Fine Approach for Cross-domain Slot Filling](https://aclanthology.org/2020.acl-main.3/). *ACL 2020*, pp. 19–25.
+- <a id="ref-liu-2022"></a>**Liu et al. (2022).** Jian Liu, Mengshi Yu, Yufeng Chen, Jinan Xu, & Yujie Zhang. [Cross-Domain Slot Filling as Machine Reading Comprehension: A New Perspective](https://doi.org/10.1109/TASLP.2022.3140559). *IEEE/ACM TASLP 2022*, Vol. 30, pp. 673–685.
+- <a id="ref-liu-2025"></a>**Liu et al. (2025).** RCPTSF: Cross-domain slot filling *(2025)*.
+- <a id="ref-mirza-2024"></a>**Mirza et al. (2024).** Paramita Mirza, Viju Sudhi, Soumya Ranjan Sahoo, & Sinchana Ramakanth Bhat. [ILLUMINER: Instruction-tuned Large Language Models as Few-shot Intent Classifier and Slot Filler](https://aclanthology.org/2024.lrec-main.758/). *LREC-COLING 2024*.
+- <a id="ref-pan-2023"></a>**Pan et al. (2023).** Wenbo Pan, Qiguang Chen, Xiao Xu, Wanxiang Che, & Libo Qin. [A Preliminary Evaluation of ChatGPT for Zero-shot Dialogue Understanding](https://arxiv.org/abs/2304.04256). *arXiv:2304.04256*.
+- <a id="ref-rana-2025"></a>**Rana et al. (2025).** Mansi Rana, Kadri Hacioglu, Sindhuja Gopalan, & Maragathamani Boothalingam. [Zero-shot Slot Filling in the Age of LLMs for Dialogue Systems](https://aclanthology.org/2025.coling-industry.59/). *COLING 2025 Industry Track*.
+- <a id="ref-rastogi-2020"></a>**Rastogi et al. (2020).** Abhinav Rastogi, Xiaoxue Zang, Srinivas Sunkara, Raghav Gupta, & Pranav Khaitan. [Towards Scalable Multi-Domain Conversational Agents: The Schema-Guided Dialogue Dataset](https://arxiv.org/abs/1909.05855). *AAAI 2020*.
+- <a id="ref-sainz-2024"></a>**Sainz et al. (2024).** Oscar Sainz, Iker García-Ferrero, Rodrigo Agerri, Oier Lopez de Lacalle, German Rigau, & Eneko Agirre. [GoLLIE: Annotation Guidelines improve Zero-Shot Information-Extraction](https://arxiv.org/abs/2310.03668). *ICLR 2024*.
+- <a id="ref-shah-2019"></a>**Shah et al. (2019).** Darsh Shah, Raghav Gupta, Amir Ali Fayazi, & Dilek Hakkani-Tür. [Robust Zero-Shot Cross-Domain Slot Filling with Example Values](https://aclanthology.org/P19-1547/). *ACL 2019*.
+- <a id="ref-siddique-2021"></a>**Siddique et al. (2021).** A. B. Siddique, Fuad Jamour, Luxun Xu, & Vagelis Hristidis. [Generalized Zero-shot Intent Detection via Commonsense Knowledge](https://arxiv.org/abs/2102.02925). *SIGIR 2021*.
+- <a id="ref-song-2025"></a>**Song et al. (2025).** Mengxiao Song, Tingwen Liu, Quangang Li, Duohe Ma, Ming Sun, & Ling Tian. [Zero-Shot Cross-Domain Slot Filling with Retrieval Augmented In-Context Learning](https://dblp.org/rec/conf/icassp/SongLLMST25). *ICASSP 2025*, pp. 1–5.
+- <a id="ref-tavares-2023"></a>**Tavares et al. (2023).** Diogo Tavares et al. [Task Conditioned BERT for Joint Intent Detection and Slot-filling](https://arxiv.org/abs/2308.06165). *arXiv:2308.06165*.
+- <a id="ref-xu-2024"></a>**Xu et al. (2024).** Canwen Xu, Yichong Xu, Shuohang Wang, Yang Liu, Chenguang Zhu, & Julian McAuley. [Small Models are Valuable Plug-ins for Large Language Models](https://aclanthology.org/2024.findings-acl.18/). *Findings of ACL 2024*.
+- <a id="ref-yan-2022"></a>**Yan et al. (2022).** Yang Yan, Junda Ye, Zhongbao Zhang, & Liwen Wang. [AISFG: Abundant Information Slot Filling Generator](https://aclanthology.org/2022.naacl-main.308/). *NAACL 2022*, pp. 4180–4187.
+- <a id="ref-yang-2025"></a>**Yang et al. (2025).** An Yang, Junyang Lin, Jingren Zhou, et al. [Qwen3 Technical Report](https://arxiv.org/abs/2505.09388). *arXiv:2505.09388*.
+- <a id="ref-yao-2024"></a>**Yao et al. (2024).** Yao Yao, Zuchao Li, & Hai Zhao. [GKT: A Novel Guidance-Based Knowledge Transfer Framework For Efficient Cloud-edge Collaboration LLM Deployment](https://arxiv.org/abs/2405.19635). *Findings of ACL 2024*, pp. 3433–3446.
+- <a id="ref-yoran-2024"></a>**Yoran et al. (2024).** Ori Yoran, Tomer Wolfson, Ori Ram, & Jonathan Berant. [Making Retrieval-Augmented Language Models Robust to Irrelevant Context](https://arxiv.org/abs/2310.01558). *ICLR 2024*.
+- <a id="ref-yu-2021"></a>**Yu et al. (2021).** Mengshi Yu, Jian Liu, Yufeng Chen, Jinan Xu, & Yujie Zhang. [Cross-Domain Slot Filling as Machine Reading Comprehension](https://www.ijcai.org/proceedings/2021/). *IJCAI 2021*, pp. 3992–3998.
+- <a id="ref-zhang-2023"></a>**Zhang & Zhang (2023).** Junwen Zhang & Yin Zhang. [HierarchicalContrast: A Coarse-to-Fine Contrastive Learning Framework for Cross-Domain Zero-Shot Slot Filling](https://aclanthology.org/2023.findings-emnlp.965/). *Findings of EMNLP 2023*, pp. 14483–14503.
+- <a id="ref-zhang-2024"></a>**Zhang et al. (2024).** Tianjun Zhang, Shishir G. Patil, Naman Jain, Sheng Shen, Matei Zaharia, Ion Stoica, & Joseph E. Gonzalez. [RAFT: Adapting Language Model to Domain Specific RAG](https://arxiv.org/abs/2403.10131). *arXiv:2403.10131*.
+- <a id="ref-zhao-2022"></a>**Zhao et al. (2022).** Jeffrey Zhao, Raghav Gupta, Yuan Cao, Dian Yu, Mingqiu Wang, Harrison Lee, Abhinav Rastogi, Izhak Shafran, & Yonghui Wu. [Description-Driven Task-Oriented Dialog Modeling](https://arxiv.org/abs/2201.08904). *arXiv:2201.08904*.
+- <a id="ref-zhu-2024"></a>**Zhu et al. (2024).** Zhihong Zhu, Xuxin Cheng, Hao An, Zhichang Wang, Dongsheng Chen, & Zhiqi Huang. [Zero-Shot Spoken Language Understanding via Large Language Models: A Preliminary Study](https://aclanthology.org/2024.lrec-main.1554/). *LREC-COLING 2024*.

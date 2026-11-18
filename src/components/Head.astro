@@ -39,6 +39,39 @@ const canonicalURL = new URL(Astro.url.pathname, Astro.site);
         }
       };
 
+      const readStoredTheme = () => {
+        try {
+          const saved = localStorage.getItem('theme');
+          return saved === 'light' || saved === 'dark' ? saved : null;
+        } catch {
+          return null;
+        }
+      };
+
+      const colorSchemeQuery = window.matchMedia?.('(prefers-color-scheme: dark)');
+      const getSystemTheme = () => (colorSchemeQuery?.matches ? 'dark' : 'light');
+      const resolveTheme = () => readStoredTheme() ?? getSystemTheme();
+
+      const syncPictureSources = (theme, root = document) => {
+        if (!root || typeof root.querySelectorAll !== 'function') return;
+        const media = theme === 'dark' ? 'all' : 'not all';
+        const sources = root.matches?.('picture > source')
+          ? [root]
+          : root.querySelectorAll('picture > source');
+
+        sources.forEach((source) => {
+          if (
+            source.dataset.themeManaged === '1' ||
+            /prefers-color-scheme/i.test(source.getAttribute('media') || '')
+          ) {
+            source.dataset.themeManaged = '1';
+            if (source.getAttribute('media') !== media) {
+              source.setAttribute('media', media);
+            }
+          }
+        });
+      };
+
       const applyLang = (lang, emit = false) => {
         const prev = document.documentElement.dataset.lang;
         document.documentElement.dataset.lang = lang;
@@ -57,15 +90,57 @@ const canonicalURL = new URL(Astro.url.pathname, Astro.site);
         }
       };
 
+      const applyTheme = (theme, emit = false) => {
+        const prev = document.documentElement.dataset.theme;
+        document.documentElement.dataset.theme = theme;
+        syncPictureSources(theme);
+
+        if (emit && prev !== theme) {
+          window.dispatchEvent(new CustomEvent('themechange', { detail: { theme } }));
+        }
+      };
+
       applyLang(readLang());
+      applyTheme(resolveTheme());
+
+      if (typeof MutationObserver !== 'undefined') {
+        const observer = new MutationObserver((mutations) => {
+          const theme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+          for (const mutation of mutations) {
+            for (const node of mutation.addedNodes) {
+              if (node.nodeType === 1) {
+                syncPictureSources(theme, node);
+              }
+            }
+          }
+        });
+        observer.observe(document.documentElement, { childList: true, subtree: true });
+        document.addEventListener('DOMContentLoaded', () => {
+          syncPictureSources(resolveTheme());
+          observer.disconnect();
+        }, { once: true });
+      }
+
+      colorSchemeQuery?.addEventListener('change', (event) => {
+        if (!readStoredTheme()) {
+          applyTheme(event.matches ? 'dark' : 'light', true);
+        }
+      });
 
       window.addEventListener('pageshow', () => {
         applyLang(readLang(), true);
+        applyTheme(resolveTheme(), true);
       });
 
       window.addEventListener('storage', (event) => {
         if (event.key === 'lang') {
           applyLang(event.newValue === 'en' ? 'en' : 'zh', true);
+        } else if (event.key === 'theme') {
+          const next =
+            event.newValue === 'light' || event.newValue === 'dark'
+              ? event.newValue
+              : getSystemTheme();
+          applyTheme(next, true);
         }
       });
 
@@ -78,6 +153,11 @@ const canonicalURL = new URL(Astro.url.pathname, Astro.site);
             document.title = nextTitle;
           }
         }
+      });
+
+      window.addEventListener('themechange', (event) => {
+        const theme = event.detail?.theme === 'dark' ? 'dark' : 'light';
+        syncPictureSources(theme);
       });
     })();
   </script>

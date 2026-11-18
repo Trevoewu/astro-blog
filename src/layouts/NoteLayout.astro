@@ -76,6 +76,21 @@ const {
       scroll-margin-top: 2em;
     }
 
+    :global(a[id]) {
+      scroll-margin-top: 2em;
+    }
+
+    :global(h2:target),
+    :global(h3:target),
+    :global(h4:target),
+    :global(h5:target),
+    :global(li:target),
+    :global(li:has(> a:target)) {
+      scroll-margin-top: 2em;
+      border-radius: 2px;
+      animation: target-highlight 2s ease-out;
+    }
+
     :global(h2) {
       font-size: 1.3em;
     }
@@ -185,6 +200,21 @@ const {
 
     :global(pre > code) {
       all: unset;
+    }
+  }
+
+  @keyframes target-highlight {
+    0% {
+      background-color: var(--theme-code-block);
+      box-shadow: 0 0 0 0.25em var(--theme-code-block);
+    }
+    30% {
+      background-color: var(--theme-code-block);
+      box-shadow: 0 0 0 0.25em var(--theme-code-block);
+    }
+    100% {
+      background-color: transparent;
+      box-shadow: 0 0 0 0.25em transparent;
     }
   }
 </style>
