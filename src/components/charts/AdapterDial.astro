@@ -2,37 +2,47 @@
 import ResearchPlot from './ResearchPlot.astro';
 import data from '@/data/stubborn-slot-filling.json';
 
+interface Props {
+  lang?: 'zh' | 'en';
+}
+
+const { lang = 'en' } = Astro.props;
+const isZh = lang === 'zh';
+const idPrefix = isZh ? 'zh-' : '';
+
 // Rows contain λ, robustness %, controllability %, then Solo and Advised F1 %.
 const scaleKey = (scale: number) => `λ = ${scale}`;
 const f1Styles = [
   { label: 'Solo', tone: 'main', column: 3 },
-  { label: 'Advised', tone: 'blue', column: 4 },
+  { label: isZh ? '顾问引导' : 'Advised', tone: 'blue', column: 4 },
 ] as const;
 ---
 
 <div class="adapter-dial">
   {Object.entries(data.adapterDial).map(([dataset, rows]) => (
-    <section aria-label={`${dataset} adapter dial`}>
+    <section aria-label={isZh ? `${dataset} 适配器权重缩放` : `${dataset} adapter dial`}>
       <div class="plots">
         <ResearchPlot
-          id={`dial-${dataset}-conflict`}
-          title={`${dataset} · Robustness and control`}
-          xLabel="Strict noise robustness (%)"
-          yLabel="Conflict controllability (%)"
+          lang={lang}
+          id={`${idPrefix}dial-${dataset}-conflict`}
+          title={isZh ? `${dataset} · 鲁棒性与可控性` : `${dataset} · Robustness and control`}
+          xLabel={isZh ? '严格噪声鲁棒性 (%)' : 'Strict noise robustness (%)'}
+          yLabel={isZh ? '冲突可控性 (%)' : 'Conflict controllability (%)'}
           xTicks={[0, 20, 40, 60, 80, 100]}
           yTicks={[40, 55, 70, 85, 100]}
           series={[
             {
-              label: 'Adapter scale', tone: 'main',
+              label: isZh ? '适配器权重' : 'Adapter scale', tone: 'main',
               points: rows.map(([scale, x, y]) => ({ x, y, key: scaleKey(scale), value: `R ${x.toFixed(2)}%, C ${y.toFixed(2)}%`, annotation: scaleKey(scale) })),
             },
           ]}
         />
         <ResearchPlot
-          id={`dial-${dataset}-f1`}
-          title={`${dataset} · Extraction F1`}
-          xLabel="LoRA scale λ"
-          yLabel="Strict span F1 (%)"
+          lang={lang}
+          id={`${idPrefix}dial-${dataset}-f1`}
+          title={isZh ? `${dataset} · 抽取 F1` : `${dataset} · Extraction F1`}
+          xLabel={isZh ? 'LoRA 权重 λ' : 'LoRA scale λ'}
+          yLabel={isZh ? '严格片段 F1 (%)' : 'Strict span F1 (%)'}
           xDomain={[-0.04, 1.04]}
           xTicks={[0, 0.25, 0.5, 0.75, 1]}
           yTicks={[40, 50, 60, 70, 80, 90]}

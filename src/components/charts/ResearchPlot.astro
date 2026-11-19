@@ -23,9 +23,10 @@ interface Props {
   yTicks: number[];
   xDomain?: [number, number];
   series: Series[];
+  lang?: 'zh' | 'en';
 }
 
-const { id, title, xLabel, yLabel, xTicks, yTicks, xDomain, series } = Astro.props;
+const { id, title, xLabel, yLabel, xTicks, yTicks, xDomain, series, lang = 'en' } = Astro.props;
 const width = 360;
 const height = 218;
 const left = 49;
@@ -52,7 +53,9 @@ const y = (value: number) => bottom - (bottom - top) * (value - yMin) / (yMax - 
     ))}
   </div>
   <svg class="plot" viewBox={`0 0 ${width} ${height}`} role="img" aria-labelledby={`${id}-title`} aria-describedby={`${id}-description`}>
-    <desc id={`${id}-description`}>{yLabel} by {xLabel}. Series: {series.map(({ label }) => label).join(', ')}. Use the left and right arrow keys to browse values.</desc>
+    <desc id={`${id}-description`}>{lang === 'zh'
+      ? `按${xLabel}展示${yLabel}。序列：${series.map(({ label }) => label).join('、')}。使用左右方向键浏览数值。`
+      : `${yLabel} by ${xLabel}. Series: ${series.map(({ label }) => label).join(', ')}. Use the left and right arrow keys to browse values.`}</desc>
     {yTicks.map((tick) => (
       <g>
         <path class="grid-line" d={`M${left} ${y(tick)}H${right}`} />

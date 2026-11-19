@@ -1,0 +1,251 @@
+---
+title: "鲁棒却固执：为何顾问引导的零样本槽位填充受困于标注规范"
+pubDate: 2026-11-17 19:00:00
+description: "为何源域微调会让开源权重槽位填充抽取器对噪声建议更鲁棒，却对有效建议变固执——以及推理期缓解手段的边界。"
+lang: zh
+translationOf: robust-yet-stubborn-slot-filling
+published: true
+---
+
+import SnipsTrajectory from "../../components/charts/SnipsTrajectory.astro";
+import AdapterDial from "../../components/charts/AdapterDial.astro";
+
+## 摘要
+
+零样本跨领域槽位填充在两类模型之间面临鲜明的能力不对称。前沿黑盒大语言模型（LLM）能够广泛泛化到未见槽位，但经常出现片段边界错误，且无法在本地进行微调。相反，紧凑型开源权重模型可以通过微调严格约束片段边界和输出格式，但对未见槽位的覆盖能力不足。**顾问引导的槽位填充**（advisor-guided slot filling）通过将冻结的黑盒 LLM **顾问**（*advisor*）与源域训练的开源权重**抽取器**（*extractor*）配对来弥合这一差距。然而，即便顾问在未见槽位上给出了完全精确的金标片段，经过微调的抽取器仍会频繁将其覆盖。
+
+我们在 SNIPS 和 ATIS 上研究了为何源域微调会把一个可控的基座模型变成**鲁棒却固执**的抽取器，并得出三项发现。第一，固执在训练最初的 200 步内便已形成——远早于噪声拒止能力趋于稳定之前——并且无法通过早停、缩放 LoRA 权重或显式标记未见槽位将其与噪声鲁棒性分离开。第二，鲁棒性与固执源自完全相同的源域先验：在 ATIS 上，抽取器会把合法的角色限定片段迁移到通用的扁平槽位中；在 SNIPS 上，它会反复拒绝常见词——例如将 `"my"` 标为 `playlist_owner`——因为源域训练数据中这些词曾出现数百次，却从未带过金标。第三，这两种机制阐明了在不修改模型权重的前提下，推理期缓解手段的能与不能：无标签的槽位名门控可以缓解 ATIS 上的错位槽位复制，但高频重复出现的词级遗漏反映的是可识别性缺口，任何零标签裁判都无法解决。针对每个高频冲突词对人工确认 1 到 3 条样本，能提供一种低成本、低回退风险的补丁方案——以放弃少样本微调更高的 F1 上限为代价，换取极低的标注工作量——而模型底层的固执本身仍是一个有待解决的训练期问题。
+
+---
+
+## 1. 引言
+
+零样本跨领域槽位填充无需目标领域的标注训练数据，即可从用户话语中抽取目标域槽位值（[Liu et al., 2020](#zh-ref-liu-2020)；[Yu et al., 2021](#zh-ref-yu-2021)）。在实践中，研究者往往面临两类模型之间难以兼得的权衡。**前沿黑盒大语言模型（LLM）**对未见目标槽位具有广泛的泛化能力，但无法在本地微调，且在直接提示下经常给出松散不准的片段边界。相反，**紧凑型开源权重 LLM** 可以在源域数据上低成本微调以严格遵循片段边界和输出格式，但在不熟悉的目标槽位上缺乏足够的覆盖能力。
+
+**顾问引导抽取**（advisor-guided extraction）通过简单的分工结合了双方优势：
+
+- **顾问**是一个参数冻结的黑盒前沿 LLM，负责阅读用户话语和目标 schema，为每个槽位提出候选片段。由于顾问始终不被修改，它可以跨不同模型提供商自由替换。
+- **抽取器**是一个紧凑型开源权重 LLM，经源域数据微调后，结合话语、schema 与顾问建议做出最终预测。
+
+在多个跨领域基准与不同顾问模型上，这种混合架构的表现始终优于单独运行其中任一模型。
+
+然而，这种分工也带来了一个出乎意料的现象。面对完全相同的顾问建议，未微调的基座模型表现为**可控但轻信**：它几乎会采纳所有有效建议，但同时也会照单全收顾问的大部分错误。而在源域上进行微调后，抽取器随即进入**鲁棒却固执**的状态：它学会了过滤噪声建议，但也开始覆盖顾问的意见——即便顾问在未见槽位上给出的就是完全准确的金标片段。
+
+这种固执具体表现为两种模式。在 SNIPS 上，当不同数据集对如何将日常口语映射为原文复制片段存在规范差异时，微调后的抽取器会反复丢弃相关词。以 *"add this track to my global funk"* 为例，这里的 `"my"` 只是指代用户自己的播放列表而非具名拥有者；但由于槽位填充要求从原句复制连续子串而不能改写为 `user`，目标域规范便将 `"my"` 标注为 `playlist_owner`。而 SNIPS 的其他领域则将 `"my"` 视作普通代词而不予标注，这等于在训练中教会抽取器忽略它。测试时，未微调基座模型每次都会采纳顾问给出的 `playlist_owner="my"` 建议，而源域微调后的抽取器则会每一次都将其拒绝。在 ATIS 上则出现了第二种模式：微调后的抽取器不会直接丢弃有效的顾问片段，而是将其从具体的角色限定槽位（如 `fromloc.city_name`）挪入通用槽位（如 `city_name`）。
+
+为何源域微调会让抽取器变得**鲁棒却固执**，在不重新训练的前提下推理期缓解手段又能走多远？为刻画这一转变，第 2 节借鉴并改造了前人工作（[Li et al., 2022](#zh-ref-li-2022)；[Goyal et al., 2025](#zh-ref-goyal-2025)），定义了两项行为指标：**冲突可控性**（$\mathcal{C}_{\mathrm{conf}}$），衡量抽取器自身预测错误时采纳有效顾问建议的频率；以及**严格噪声鲁棒性**（$\mathcal{R}$），衡量自身预测正确时抵御错误顾问建议的频率。我们的研究分三步回答了上述问题：
+
+- **固执在训练早期便已形成，且无法靠调节微调强度或标记槽位消除（第 3 节）。** 采纳冲突建议的意愿在训练前 200 步内便断崖式下跌，远早于噪声拒止能力停止提升之前。在推理期调低 LoRA 适配器权重并不存在能让两项指标同时保持高位的“甜蜜点”；而且这种下降在已见槽位和未见槽位上同步发生——因此无论是显式标记未见槽位，还是只对不确定样本路由请求顾问，都无法恢复对正确建议的采纳。
+- **鲁棒性与固执来自完全相同的源域先验（第 4 节）。** 覆盖顾问建议并非罕见槽位上的随机失误，而是高度集中在两种学到的源域习惯上。在 ATIS 上，扁平 schema 的训练习惯会把片段从角色限定槽位挤入通用基础槽位；在 SNIPS 上，诸如 `"my"`、`"this"`、`"here"` 这类词在源域训练中出现过数百次却**从未**拥有金标，从而让抽取器一见即拒。在同一提示中把 `"my"` 替换为普通人名，模型会立刻恢复采纳——这证实问题源于针对特定词的拒绝先验，而非建议遵循机制本身损坏。
+- **推理期缓解手段能减轻这两种症状，但无法根治固执（第 5 节）。** 由于错位槽位复制是在共享同一基础名的槽位之间转移片段（例如 `fromloc.city_name` 与 `city_name`），一个无标签的 schema 门控就能在不影响 SNIPS 的前提下显著缓解 ATIS 上的错误。相比之下，任何零标签方法——哪怕是更强的 LLM 裁判模型——都无法区分合法的目标域用词规范与系统性的顾问错误。对每个高频冲突词对人工确认 1 到 3 条样本，能够以极低成本和近乎零回退的方式修补这些重复争议；尽管其 F1 增幅低于完整的少样本微调，且抽取器底层的固执依然存在。
+
+---
+
+## 2. 实验设置
+
+### 2.1 基准数据集与模型
+
+我们将一个经 LoRA 在源域标注数据上微调的紧凑型开源权重**抽取器**——`Qwen3-8B`（[Yang et al., 2025](#zh-ref-yang-2025)）——与一个参数冻结的前沿 LLM **顾问**配对，由后者为各个槽位提出候选片段。不提供顾问建议、仅运行抽取器所得的结果记为 `Solo` 基线。
+
+我们在两个英文基准上评测零样本迁移效果：
+
+- **SNIPS**（[Coucke et al., 2018](#zh-ref-coucke-2018)）：包含七个日常语音助手领域，采用留一领域评测（[Liu et al., 2020](#zh-ref-liu-2020)），即在六个领域上训练，在留出的第七个领域上测试。由于扁平槽位名会在领域间复用，每个目标领域都同时混合了**源域已见槽位**与**未见目标槽位**。
+- **SNIPS-to-ATIS**（[Hemphill et al., 1990](#zh-ref-hemphill-1990)）：将在 SNIPS 上训练好的抽取器零样本迁移到 ATIS 航班预订查询语料上进行评测。ATIS 采用带层级的角色限定槽位名（如 `fromloc.city_name`），与 SNIPS 没有任何同名槽位，因此其全部目标槽位均属于未见槽位。
+
+### 2.2 衡量可控性与噪声鲁棒性
+
+对于每个槽位，将抽取器的 `Solo` 预测与顾问给出的建议逐一对照，可将每一次有建议参与的预测划分为四种情形（表 1）。
+
+|               | **建议正确**                               | **建议错误**                 |
+| :------------ | :----------------------------------------- | :--------------------------- |
+| **Solo 正确** | 一致性保持                                 | 噪声鲁棒性（$\mathcal{R}$） |
+| **Solo 错误** | 冲突可控性（$\mathcal{C}_{\mathrm{conf}}$） | 双错恢复                     |
+
+*表 1：单槽位上顾问与抽取器交互的四格拆解。非对角线上的冲突格子分别隔离出冲突可控性（$\mathcal{C}_{\mathrm{conf}}$）与严格噪声鲁棒性（$\mathcal{R}$）。*
+
+借鉴 [Li et al. (2022)](#zh-ref-li-2022)，我们重点关注两个非对角冲突格子：
+
+- **冲突可控性（$\mathcal{C}_{\mathrm{conf}}$）：** 当 `Solo` 预测错误而顾问提供了精确金标片段时，抽取器采纳顾问答案的比例是多少？
+- **噪声鲁棒性（$\mathcal{R}$）：** 当 `Solo` 预测正确而顾问提供了错误建议时，抽取器坚持自身正确判断的比例是多少？
+
+在两个对角线格子上，未微调基座模型与微调抽取器的行为几乎完全一致：当双方就正确答案达成一致时，两者保持正确结果的比例均超过 99%；当双方同时出错时，两者均极少能自行纠错恢复（$<7\%$）。源域微调所带来的行为偏移，几乎全部发生在抽取器与顾问意见相左之时。
+
+---
+
+## 3. 固执悖论与不成立的解释
+
+为何源域微调会把一个可控的基座模型变成**鲁棒却固执**的抽取器？我们首先检验并排除了两种直观假设：
+
+- **是否只是微调过头了？** 我们能否通过早停或推理期调低 LoRA 权重找到一个折中点，使模型既能拒止噪声，又不至于覆盖有效建议？
+- **是否是对新槽位名称的不熟悉阻碍了模型判断？** 当目标槽位从未见过时，抽取器是否因为缺乏知识而无法判断顾问建议的对错——如果显式标记出未见槽位，能否教会它听从建议？
+
+### 3.1 微调强度中不存在“甜蜜点”
+
+如果固执源于微调过度，那么减弱微调强度——无论是提前停止训练，还是在推理期下调 LoRA 适配器权重——理应能捕捉到一个折中区间。但沿这两个维度测试后我们发现，并不存在这样的甜蜜点：固执早在噪声拒止能力成熟之前就已经固化。
+
+<SnipsTrajectory lang="zh" />
+
+*图 1：SNIPS 上冲突可控性（$\mathcal{C}_{\mathrm{conf}}$）与噪声鲁棒性（$\mathcal{R}$）随微调步数的变化轨迹。无论在已见槽位还是未见槽位上，模型采纳冲突建议的意愿都在训练早期迅速崩塌，远早于噪声拒止进入平台期。*
+
+**训练早停。** 图 1 追踪了 SNIPS 各训练检查点上的冲突可控性（$\mathcal{C}_{\mathrm{conf}}$）与严格噪声鲁棒性（$\mathcal{R}$）。在微调刚刚起步的第 100 至 200 步之间，$\mathcal{C}_{\mathrm{conf}}$ 就从 65.3% 骤降至 41.0%，并在余下的训练过程中一直停留在低位；而此时噪声鲁棒性 $\mathcal{R}$ 仍在继续攀升，尚未达到平台期。关键在于，即使在所有检查点上固定同一组冲突样本进行评测，这一早期骤降依然成立（从而排除了“因 `Solo` 准确率随训练提高导致样本池变化”的假象），且在**源域已见槽位**与**未见目标槽位**上步调完全一致。监督微调并非在训练后期才缓慢过拟合，而是一开始就触发了向“信任内部参数胜过外部建议”的剧烈偏移，这与指令微调中的上下文-参数反转现象相呼应（[Goyal et al., 2025](#zh-ref-goyal-2025)）。
+
+<AdapterDial lang="zh" />
+
+*图 2：推理期将 LoRA 适配器权重 $\lambda$ 从 $0$（未微调基座）线性缩放到 $1$（完整适配器）。在两个基准上，冲突可控性（$\mathcal{C}_{\mathrm{conf}}$）均随 $\lambda$ 增大而急剧下降，不存在能让可控性与噪声鲁棒性（$\mathcal{R}$）同时维持高位的缩放区间。*
+
+**推理期调低适配器权重。** 另一种直观替代方案是先把抽取器充分微调，再在推理期下调其 LoRA 适配器权重 $\lambda \in [0, 1]$，在未微调基座模型（$\lambda = 0$）与完整微调抽取器（$\lambda = 1$）之间插值。图 2 表明，这种做法会撞上完全相同的权衡困境。在 SNIPS 上，将适配器维持在较低强度（$\lambda \le 0.25$）虽然能保住很高的可控性（$\mathcal{C}_{\mathrm{conf}} \ge 85.2\%$），但噪声鲁棒性过低，根本无法过滤错误建议（$\mathcal{R} \le 30.2\%$）；而将 $\lambda$ 从 $0.25$ 推高到 $1.0$ 会使噪声鲁棒性升至 $89.0\%$，却同时把冲突可控性一路压低至 $49.4\%$。ATIS 上也存在完全相同的拉扯：随着 $\lambda$ 从 $0.5$ 增至 $1.0$，噪声鲁棒性从 $27.8\%$ 升至 $69.6\%$，而可控性则从 $91.7\%$ 跌至 $57.4\%$——导致顾问引导下的 F1 从 $71.44$ 下滑到 $66.68$。因此，无论是训练早停还是推理期削弱适配器，都不存在能把噪声拒止与固执剥离开的甜蜜点。
+
+### 3.2 对新槽位名称不熟悉并非原因
+
+另一种自然假设是：在未见目标槽位上，抽取器由于不够了解新槽位名，无法分辨顾问建议是否合理；只要明确告知模型哪些槽位是陌生的，它就会选择服从顾问。由于在训练中从未见过的标记词在测试时毫无意义，我们设计了如下对照实验：先从几乎所有源域训练 schema 中抽掉 10 个源域槽位，仅保留极少量样本并打上 `[new]` 标签，同时将所有充分训练的槽位标为 `[familiar]`；随后在测试时把 `[new]` 标记加到真正未见的目标槽位上。
+
+如果对槽位名不熟悉真是固执的诱因，那么抽取器在单独预测（`Solo`）时理应在这些极低曝光槽位上表现吃力，并在测试时看到 `[new]` 标记后主动顺从顾问。然而两项推论均未成立：
+- **模型原本就能轻松读懂槽位名：** 仅训练到第 50 步——平均每个被抽掉的槽位只见过约 2 条正样本——这 10 个槽位上的 `Solo` 准确率就已达到 **87%**（收敛时更是超过 **95%**）。这说明一旦掌握了输出格式，预训练模型几乎立刻就能理解标准的槽位名称。
+- **显式不熟悉标记治不好固执：** 在测试集真正未见的目标槽位上，加入 `[new]` 标记仅让冲突可控性微升（相比无标记对照组仅 $+2.1$ 个百分点），未能修复对 `playlist_owner="my"` 的拒绝（顺从率仅为 **2.5%**），反而使新槽位上的噪声鲁棒性下降了 **17 个百分点**。
+
+抽取器覆盖顾问并非因为看不懂新槽位名，而是因为它在源域学到的先验主动反对顾问给出的那个片段。基于词元置信度的选择性路由也会撞上同一堵墙：当源域先验与目标域规范冲突时（例如在 `AddToPlaylist` 上拒绝 `"my"`），抽取器对自身输出 `NONE` 往往有着**极高的置信度**，因此置信度路由只能节省查询开销，却完全无法消除固执。
+
+---
+
+## 4. 为何鲁棒性与固执同源
+
+为何训练强度和槽位标记都无法把噪声鲁棒性与固执分开？对微调抽取器究竟覆盖了哪些内容进行剖析后可以看到，**这两种行为源自完全相同的源域先验**。正是学会了“哪些词应当保持未标注”以及“源域 schema 应如何组织”，才让抽取器能够稳健地抵御噪声建议；而每当目标域规范与这些习惯相左时，同一套先验就会促使它覆盖有效建议。
+
+### 4.1 两种冲突模式：槽位重分配与聚集性词级遗漏
+
+在 ATIS 和 SNIPS 上，源域微调抽取器覆盖有效建议的失误并非落在罕见话语上的随机噪声，而是分化为两种系统性模式：
+
+1. **Schema 偏置导致的槽位重分配（ATIS）：** 在 ATIS 中，目标槽位构成层级结构，需要用角色来限定通用概念（例如除了光秃的 `city_name` 之外，还有 `fromloc.city_name` 和 `toloc.city_name`）。在此情况下，微调后的抽取器很少直接删掉顾问给出的片段，而是会将其挪到更宽泛的槽位里：覆盖顾问建议时**丢失的全部实体中有 91.6%** 会立刻以另一个槽位名重新出现，几乎全是从角色限定槽位转移到了对应的通用基础槽位。
+2. **聚集性词级遗漏（SNIPS 及 ATIS 其余冲突）：** 在槽位名扁平的 SNIPS 上，抽取器会通过输出 `NONE` 来否决有效的顾问片段。这些遗漏源于抽取式槽位填充的片段复制约束：因为模型必须从话语中逐字复制原文片段，而不能将其改写（例如把 `"my"` 规范化为 `user`，或把 `"here"` 规范化为 `user_location`），标注者只能决定代词与指示词——如代表 `playlist_owner` 的 `"my"`、代表 `object_select` 的 `"this"`、代表 `current_location` 的 `"here"`——究竟算作槽位片段还是保持未标注。这些冲突并非随机分散在各个句子里，SNIPS 中超过三分之二的冲突集中在区区几十个高频重复的 `(slot, span)` 词对上。ATIS 上也存在同样的高度集中现象：在剥离错位槽位复制之后，几乎所有剩余冲突都来自仅仅五个高频词对，例如把 `"after"` 标在 `depart_time.time_relative` 下，或把通用词 `"flight"` 标在 `flight` 下。
+
+### 4.2 源域训练主动教会了相反的规则
+
+| 目标槽位           | 片段     | 源域出现次数（金标数） | 目标域验证集金标率 |
+| :----------------- | :------- | ---------------------: | -----------------: |
+| `playlist_owner`   | `"my"`   |            375（0 金标） |              99.2% |
+| `object_select`    | `"this"` |            624（0 金标） |              97.2% |
+| `current_location` | `"here"` |             65（0 金标） |              95.2% |
+
+*表 2：SNIPS 代表性冲突词对在源域训练中的出现频次与目标域金标率对比。抽取器在源域中见过这些词数百次却从未见它们获得金标，从而学到了与目标域标注规范直接冲突的强负向先验。*
+
+为何微调后的抽取器会如此顽固地拒绝这些特定词汇？统计它们在 SNIPS 六个源域训练集中的出现频次即可看出，抽取器并非不认识它们——它是在训练中被反复教会不要标注这些词（表 2）。
+
+在为留出的 `AddToPlaylist` 领域训练抽取器时，单词 `"my"` 在源域训练话语中出现了 **375 次**，却获得了 **0** 个金标槽位标签。源域微调因此向模型灌输了一条严格的负向规则：只要句中出现 `"my"`，就不要抽取它。到了 `AddToPlaylist` 测试集上，`"my"` 有 **99.2%** 的情况都是 `playlist_owner` 的金标片段，这条学到的规则便与目标规范迎头相撞：未微调基座模型会 100% 采纳 `playlist_owner="my"`，而源域微调后的抽取器则是 **0%** 采纳。完全相同的矛盾也解释了为何抽取器会拒绝 `object_select` 中的 `"this"` 和 `current_location` 中的 `"here"`。
+
+尤为关键的是，这种拒绝只针对被惩罚的特定词汇本身，并没有破坏抽取器处理 `playlist_owner` 或遵循建议的能力。如果我们取来完全相同的冲突提示——在这些提示中源域微调抽取器会 **100%** 拒绝 `"my"`——仅仅把 `"my"` 替换成一个普通人名（`"daphne s"`），微调抽取器立刻就会重新听从顾问，跨随机种子的采纳率也从 0% 回升到 **56%–96%**。这证明源域微调完好地保留了模型的建议遵循机制，只是精准封堵了那些训练时要求保持未标注的特定词。
+
+---
+
+## 5. 启示：推理期缓解手段能做什么、不能做什么
+
+既然直接削弱或重训微调抽取器可能会侵蚀其噪声鲁棒性，一个自然的工程问题是：在不修改模型权重的前提下，推理期手段究竟能缓解多少固执？第 4 节的诊断给出了三项明确结论（完整实验表格见[附录](#附录推理期缓解实验)）：
+
+- **层级结构下的错位槽位复制无需目标标签即可缓解（[附录 A.1](#a1-无标签-schema-门控)）。** 在 ATIS 中，角色限定槽位与通用回退槽位共享最后一个点号之后的基础名称（例如 `fromloc.city_name` 与 `city_name`）。一个确定性的**同族片段绑定门控**（Same-Family Span-Binding Gate）一旦检测到被劫持的复制片段，就会将其路由回对应的顾问槽位，从而将 ATIS 的 F1 提升 **+11.55 分**（超越原始顾问建议本身），同时在 SNIPS 这类扁平 schema 上保持完全休眠（**0.00 $\Delta$F1**）。
+- **词级规范无法在没有目标标签的情况下解决（[附录 A.2](#a2-词级规范上的无标签裁判模型)）。** SNIPS 的高频冲突同时混杂着合法的目标域规范（`playlist_owner="my"`、`object_select="this"`）与系统性的顾问误报（`condition_description="weather"`、`object_type="movies"`）。在只有简短槽位描述的条件下，所有零标签方法都会走向两个相反极端之一：无差别放行或外部 LLM 裁判模型会过度采纳看似合理的词（修复-误伤比低至 `0.69:1`–`2.27:1`），而未微调基座模型与源域查表则会过度拒斥合法规范。词级规范本质上是**可识别性缺口，而非推理缺口**。
+- **极少量人工确认是轻量补丁，而非彻底解药（[附录 A.3](#a3-词对确认与少样本监督对比)）。** 由于每个高频 `(slot, span)` 词对都遵循一致的目标域规则，仅需对每个冲突词对通过二元 `yes`/`no` 问题确认 1–3 条样例话语，就能在 SNIPS 上挽回 **+2.47 至 +2.88 F1**（并在 ATIS 门控之上再增加 **+2.46 F1**），同时几乎不引入回退（仅 20 条预测被破坏）。与 80 条话语的少样本微调相比，这体现的是清晰的取舍而非单一胜出者：少样本微调能学到高频冲突之外的模式，因而获得超过两倍的 F1 提升（`+6.36` 对比 `+2.88`），代价则是沉重得多的片段标注工作量以及多达 2,753 条被破坏的预测。
+
+---
+
+## 6. 结论
+
+源域微调将开源权重槽位填充抽取器从**可控但轻信**推向了**鲁棒却固执**——而这两种性质自训练伊始便绑定在一起。正是那些教会抽取器过滤噪声顾问建议的源域先验（扁平 schema 结构与针对未标注代词的负向先验），同时导致它在目标域规范相悖时覆盖有效建议。推理期权宜之计——针对层级错位槽位复制的 schema 门控，以及针对高频词对的 1–3 次二元确认——能够在不牺牲噪声鲁棒性的前提下缓解这两大主要症状，但它们终究是外挂补丁而非根治方案。如何在训练阶段真正将噪声鲁棒性与参数固执解耦，仍然是一个开放问题。
+
+---
+
+## 7. 局限性
+
+- **简短的 schema 描述。** SNIPS 和 ATIS 都只提供了 1–6 个词的简短槽位描述（例如 `playlist_owner` 的描述是 `"owner"`，`condition_description` 的描述是 `"weather"`）。在部署前编写详尽的标注指南式定义，固然能为无标签 LLM 裁判（[附录 A.2](#a2-词级规范上的无标签裁判模型)）提供更清晰的边界规则，但这本身并不能治愈微调抽取器的固执：在上述两种失效模式中，顾问原本就已经把正确片段放进了正确槽位——即便描述中明确写着 `"city name of from location"`（`fromloc.city_name`）或 `"this current"`（`object_select`），源域微调抽取器依然会凭学到的先验将其覆盖。
+- **基准与任务范围。** 我们的实验聚焦于两个英文单轮槽位填充基准——SNIPS 上的留一领域迁移以及跨数据集迁移到 ATIS。将这一分析扩展到多语言 schema 以及多轮对话状态追踪基准（如 MultiWOZ），是未来工作的重要方向。
+- **单一抽取器架构。** 尽管我们评测了跨越多个模型家族的四款冻结顾问和外部 LLM 裁判，但微调抽取器始终为 `Qwen3-8B`。抽取器参数规模或替代性微调目标（如上下文感知正则化）如何重塑早期可控性–鲁棒性权衡，仍有待后续探索。
+
+---
+
+## 8. 相关工作
+
+- **零样本跨领域槽位填充。** 早期跨领域槽位填充通过让序列标注器以槽位描述（[Bapna et al., 2017](#zh-ref-bapna-2017)；[Lee & Jha, 2019](#zh-ref-lee-2019)）或样例值（[Shah et al., 2019](#zh-ref-shah-2019)）为条件来迁移到未见目标领域，随后结合上下文感知表征（[Siddique et al., 2021](#zh-ref-siddique-2021)）、解耦的片段检测与类型识别（[Liu et al., 2020](#zh-ref-liu-2020)）以及对比槽位锐化（[He et al., 2020](#zh-ref-he-2020)；[Zhang & Zhang, 2023](#zh-ref-zhang-2023)）进一步提升了泛化能力。后续研究将槽位填充建模为问答或机器阅读理解（[Du et al., 2021](#zh-ref-du-2021)；[Yu et al., 2021](#zh-ref-yu-2021)；[Liu et al., 2022](#zh-ref-liu-2022)；[Liu et al., 2025](#zh-ref-liu-2025)）、生成式提示（[Yan et al., 2022](#zh-ref-yan-2022)；[Li et al., 2023](#zh-ref-li-2023)）或检索增强示例匹配（[Song et al., 2025](#zh-ref-song-2025)）。由于直接提示 LLM 在严格片段边界上往往表现不佳（[Pan et al., 2023](#zh-ref-pan-2023)），学者们依托 schema 引导对话接口（[Rastogi et al., 2020](#zh-ref-rastogi-2020)；[Lin et al., 2021](#zh-ref-lin-2021)；[Zhao et al., 2022](#zh-ref-zhao-2022)），陆续提出了分阶段提示（[Zhu et al., 2024](#zh-ref-zhu-2024)）、指令微调（[Mirza et al., 2024](#zh-ref-mirza-2024)）、教师蒸馏（[Rana et al., 2025](#zh-ref-rana-2025)）与合成数据生成（[Huang et al., 2025](#zh-ref-huang-2025)）来缩小这一差距。
+- **大小模型协同。** 近期研究尝试将紧凑型抽取器与大型 LLM 以互补角色配对。在 GRSF（[Li et al., 2025](#zh-ref-li-2025-grsf)）中，LLM 生成槽位知识并由训练好的评估器过滤后再供给小标注器；在 SynAug（[Li et al., 2025](#zh-ref-li-2025-synaug)）和 SuperICL（[Xu et al., 2024](#zh-ref-xu-2024)）中，小模型的预测被注入 LLM 提示中由大模型拍板最终结果。其他混合方案包括将小模型不确定的预测路由给 LLM（[Chen & Wang, 2025](#zh-ref-chen-2025)）、为零样本问答学习提问策略（[Tavares et al., 2023](#zh-ref-tavares-2023)）、以 LLM 引导前缀作为条件（[Yao et al., 2024](#zh-ref-yao-2024)），或用强化学习决定 7B 命名实体识别模型何时应当调用外部搜索（[Chen et al., 2026](#zh-ref-chen-2026)）。在术语上与本文最为接近的是 [Asawa et al. (2026)](#zh-ref-asawa-2026)，他们训练一个小型强化学习顾问以自由文本建议去引导冻结的黑盒 LLM。我们的设定则反转了这一非对称关系：由冻结的 LLM 顾问向源域训练的 8B 抽取器提出候选槽位片段，从而孤立出监督微调究竟如何支配抽取器遵循或覆盖外部建议的意愿。
+- **可控性、噪声鲁棒性与上下文-参数反转。** 权衡外部上下文与内部参数是条件生成中的核心张力。[Li et al. (2022)](#zh-ref-li-2022) 形式化界定了*可控性*（遵循冲突上下文）与*鲁棒性*（忽略无关上下文），并提出知识感知微调（KAFT）来兼顾两者。类似地，RAFT（[Zhang et al., 2024](#zh-ref-zhang-2024)）和 [Yoran et al. (2024)](#zh-ref-yoran-2024) 在相关段落与干扰段落的混合数据上训练生成器，使其学会忽略噪声上下文。然而，[Goyal et al. (2025)](#zh-ref-goyal-2025) 指出指令微调会触发*上下文-参数反转*（context-parametric inversion）：模型对外部上下文的依赖在训练极早期短暂上升，随后便在常规样本主导梯度更新时迅速崩塌。我们在顾问引导的槽位填充中观察到了如出一辙的转变：源域微调在让抽取器对噪声建议具备鲁棒性的同时，摧毁了其在冲突片段上的可控性，从而同时诱发词级规范拒绝与错位槽位复制。
+- **标注指南细化与交互式弱监督。** 多项近期框架尝试借助标注指南或弱监督反馈来消解 schema 歧义。GoLLIE（[Sainz et al., 2024](#zh-ref-sainz-2024)）训练抽取模型遵循详尽的 Python 格式指南，但其前提是这些目标指南已经编写完毕并能放入提示中。DiZiNER（[Kim & Yoon, 2026](#zh-ref-kim-2026)）通过多个 LLM 模拟试标注，在无目标标签的条件下根据模型间分歧来细化零样本 NER 指令。交互式弱监督（[Boecking et al., 2021](#zh-ref-boecking-2021)）则向标注者询问候选启发式规则而非逐条样本。我们的场景与这三者均有所不同：标准槽位填充 schema 只提供简短槽位描述而缺乏边界规则，模型间分歧也无法揭示特定目标数据集究竟采用哪种规范（[第 5 节](#5-启示推理期缓解手段能做什么不能做什么)），而针对每个高频冲突词对确认 1–3 条样本，则比句子级少样本微调提供了一种更轻量、回退更少的折中方案（[附录 A.3](#a3-词对确认与少样本监督对比)）。
+
+---
+
+## 附录：推理期缓解实验
+
+### A.1 无标签 Schema 门控
+
+每当抽取器把某个片段复制到一个顾问未曾提出任何建议的槽位、却同时让共享同一末尾点号基础名的对应顾问槽位保持空值（`NONE`）时，**同族片段绑定门控**（Same-Family Span-Binding Gate）就会拦截这次劫持复制，并将片段路由回顾问原本建议的槽位。
+
+| 方法                 |   ATIS F1 | SNIPS（`V4-Flash`） |
+| :------------------- | --------: | ------------------: |
+| 基础抽取器（+顾问）  |     66.91 |               79.69 |
+| 原始顾问建议         |     77.60 |               69.24 |
+| **同族片段绑定门控** | **78.46** |           **79.69** |
+
+*表 A1：配合 `DeepSeek-V4-Flash` 使用同族片段绑定门控在 ATIS（`+11.55` F1；在留出的 500 句验证集上跨三个随机种子为 `+11.92`）与 SNIPS（`0.00` $\Delta$F1）上的效果。*
+
+### A.2 词级规范上的无标签裁判模型
+
+| 无标签方法                            | 采纳词对数 | SNIPS $\Delta$F1 | 修复:误伤比 |
+| :------------------------------------ | ---------: | ---------------: | ----------: |
+| 始终听从顾问（23 个高频词对）         |      23/23 |          $+0.74$ |      1.07:1 |
+| 自裁判（`DeepSeek-V4-Flash`）         |      20/23 |          $+0.02$ |      0.69:1 |
+| 跨家族 LLM 裁判（`Claude-Haiku-5-5`） |      18/23 |          $+1.69$ |      2.27:1 |
+| 未微调基座模型裁判（`Qwen3-8B`）      |       3/23 |          $+0.00$ |      0.66:1 |
+| 源域金标查表                          |       2/23 |          $-0.12$ |      0.91:1 |
+
+*表 A2：在无标签条件下判断 SNIPS 23 个高频 `(slot, span)` 冲突词对中哪些应当听从顾问的尝试（其中 11/23 为合法的目标域规范）。LLM 裁判过度放行看似合理的词；基座先验与源域查表则过度拒斥合法规范。*
+
+### A.3 词对确认与少样本监督对比
+
+| 方法（SNIPS）             | 标注工作量             | $\Delta$F1 |   修复 : 误伤 |
+| :------------------------ | :--------------------- | ---------: | ------------: |
+| 少样本提示（80 句）       | 605 次核查 + 238 片段  |    $+3.80$ |   2,314 : 463 |
+| 少样本微调（80 句）       | 605 次核查 + 238 片段  |    $+6.36$ | 5,382 : 2,753 |
+| 词对确认（69 次 yes/no）  | 69 次 yes/no（0 片段） |    $+2.88$ |    1,295 : 20 |
+
+*表 A3：SNIPS 上相对 79.52 F1 基础抽取器的 F1 增益、标注工作量与回退代价对比（单随机种子比较）。*
+
+---
+
+## 参考文献
+
+- <a id="zh-ref-asawa-2026"></a>**Asawa et al. (2026).** Parth Asawa, Alan Zhu, Abby O'Neill, Matei Zaharia, Alexandros G. Dimakis, & Joseph E. Gonzalez. [How to Train Your Advisor: Steering Black-Box LLMs with Advisor Models](https://arxiv.org/abs/2510.02453). *ICML 2026 / arXiv:2510.02453*.
+- <a id="zh-ref-bapna-2017"></a>**Bapna et al. (2017).** Ankur Bapna, Gökhan Tür, Dilek Hakkani-Tür, & Larry Heck. [Towards Zero-Shot Frame Semantic Parsing for Domain Scaling](https://doi.org/10.21437/Interspeech.2017-518). *Interspeech 2017*, pp. 2476–2480.
+- <a id="zh-ref-boecking-2021"></a>**Boecking et al. (2021).** Benedikt Boecking, Willie Neiswanger, Eric Xing, & Artur Dubrawski. [Interactive Weak Supervision: Learning Useful Heuristics for Data Labeling](https://arxiv.org/abs/2012.06046). *ICLR 2021*.
+- <a id="zh-ref-chen-2025"></a>**Chen & Wang (2025).** Small-model uncertainty routing for intent detection with LLMs *(2025)*.
+- <a id="zh-ref-chen-2026"></a>**Chen et al. (2026).** Meixuan Chen, Hehan Li, Ruizhi Zhao, Xin Lu, Peizhi Xu, Liwei Qian, Meifang Li, Shuanglong Li, Hanmeng Liu, Xin Pei, & Yanbiao Ma. [NE-R1: Enhancing Named Entity Recognition Model via Reinforcement Learning](https://arxiv.org/abs/2609.02366). *EMNLP 2026 / arXiv:2609.02366*.
+- <a id="zh-ref-coucke-2018"></a>**Coucke et al. (2018).** Alice Coucke, Alaa Saade, Adrien Ball, Théodore Bluche, Alexandre Caulier, David Leroy, Clément Doumouro, Thibault Gisselbrecht, Francesco Caltagirone, Thibaut Lavril, Maël Primet, & Joseph Dureau. [Snips Voice Platform: an embedded Spoken Language Understanding system for private-by-design voice interfaces](https://arxiv.org/abs/1805.10190). *arXiv:1805.10190*.
+- <a id="zh-ref-du-2021"></a>**Du et al. (2021).** Xinya Du, Luheng He, Qi Li, Dian Yu, Panupong Pasupat, & Yuan Zhang. [QA-Driven Zero-shot Slot Filling with Weak Supervision Pretraining](https://aclanthology.org/2021.acl-short.83/). *ACL-IJCNLP 2021*, pp. 654–664.
+- <a id="zh-ref-goyal-2025"></a>**Goyal et al. (2025).** Sachin Goyal, Christina Baek, J. Zico Kolter, & Aditi Raghunathan. [Context-Parametric Inversion: Why Instruction Finetuning Can Worsen Context Reliance](https://arxiv.org/abs/2410.10796). *ICLR 2025*.
+- <a id="zh-ref-he-2020"></a>**He et al. (2020).** Keqing He, Jinchao Zhang, Yuanmeng Yan, Weiran Xu, Cheng Niu, & Jie Zhou. [Contrastive Zero-Shot Learning for Cross-Domain Slot Filling with Adversarial Attack](https://aclanthology.org/2020.coling-main.126/). *COLING 2020*.
+- <a id="zh-ref-hemphill-1990"></a>**Hemphill et al. (1990).** Charles T. Hemphill, John J. Godfrey, & George R. Doddington. [The ATIS Spoken Language Systems Pilot Corpus](https://aclanthology.org/H90-1021/). *Speech and Natural Language Workshop 1990*.
+- <a id="zh-ref-huang-2025"></a>**Huang et al. (2025).** Peijie Huang, Weizhen Li, Yuhong Xu, & Junbao Huang. Enhancing Cross-Domain Slot Filling with Joint LLM Data Generation and Data Curation. *ICASSP 2025*.
+- <a id="zh-ref-kim-2026"></a>**Kim & Yoon (2026).** Siun Kim & Hyung-Jin Yoon. [DiZiNER: Disagreement-guided Instruction Refinement via Pilot Annotation Simulation for Zero-shot Named Entity Recognition](https://arxiv.org/abs/2604.15866). *ACL 2026 / arXiv:2604.15866*.
+- <a id="zh-ref-lee-2019"></a>**Lee & Jha (2019).** Sungjin Lee & Rahul Jha. [Zero-Shot Adaptive Transfer for Conversational Language Understanding](https://doi.org/10.1609/aaai.v33i01.33016642). *AAAI 2019*, pp. 6642–6649.
+- <a id="zh-ref-li-2022"></a>**Li et al. (2022).** Daliang Li, Ankit Singh Rawat, Manzil Zaheer, Xin Wang, Michal Lukasik, Andreas Veit, Felix X. Yu, & Sanjiv Kumar. [Large Language Models with Controllable Working Memory](https://arxiv.org/abs/2211.05110). *arXiv:2211.05110*.
+- <a id="zh-ref-li-2023"></a>**Li et al. (2023).** Xuefeng Li, Liwen Wang, Guanting Dong, Keqing He, Jinzheng Zhao, Hao Lei, Jiachi Liu, & Weiran Xu. [Generative Zero-Shot Prompt Learning for Cross-Domain Slot Filling with Inverse Prompting](https://arxiv.org/abs/2307.02830). *Findings of ACL 2023*.
+- <a id="zh-ref-li-2025-grsf"></a>**Li et al. (2025, GRSF).** Weizhen Li et al. [GRSF: Generating and Refining LLM Knowledge for Cross-Domain Zero-Shot Slot Filling](https://doi.org/10.1109/TASLPRO.2025.3597441). *IEEE TASLP 2025*.
+- <a id="zh-ref-li-2025-synaug"></a>**Li et al. (2025, SynAug).** Weizhen Li, Junbao Huang, Peijie Huang, Yuhong Xu, & Jiekun Fan. [Synergistic Augmentation: Enhancing Cross-Domain Zero-Shot Slot Filling with Small Model-Assisted Large Language Models](https://aclanthology.org/2025.findings-acl.1097/). *Findings of ACL 2025*.
+- <a id="zh-ref-lin-2021"></a>**Lin et al. (2021).** Zhaojiang Lin, Bing Liu, Seungwhan Moon, Paul Crook, Zhenpeng Zhou, Zhiguang Wang, Zhou Yu, Andrea Madotto, Eunjoon Cho, & Rajen Subba. [Leveraging Slot Descriptions for Zero-Shot Cross-Domain Dialogue State Tracking](https://aclanthology.org/2021.naacl-main.448/). *NAACL 2021*.
+- <a id="zh-ref-liu-2020"></a>**Liu et al. (2020).** Zihan Liu, Genta Indra Winata, Peng Xu, & Pascale Fung. [Coach: A Coarse-to-Fine Approach for Cross-domain Slot Filling](https://aclanthology.org/2020.acl-main.3/). *ACL 2020*, pp. 19–25.
+- <a id="zh-ref-liu-2022"></a>**Liu et al. (2022).** Jian Liu, Mengshi Yu, Yufeng Chen, Jinan Xu, & Yujie Zhang. [Cross-Domain Slot Filling as Machine Reading Comprehension: A New Perspective](https://doi.org/10.1109/TASLP.2022.3140559). *IEEE/ACM TASLP 2022*, Vol. 30, pp. 673–685.
+- <a id="zh-ref-liu-2025"></a>**Liu et al. (2025).** RCPTSF: Cross-domain slot filling *(2025)*.
+- <a id="zh-ref-mirza-2024"></a>**Mirza et al. (2024).** Paramita Mirza, Viju Sudhi, Soumya Ranjan Sahoo, & Sinchana Ramakanth Bhat. [ILLUMINER: Instruction-tuned Large Language Models as Few-shot Intent Classifier and Slot Filler](https://aclanthology.org/2024.lrec-main.758/). *LREC-COLING 2024*.
+- <a id="zh-ref-pan-2023"></a>**Pan et al. (2023).** Wenbo Pan, Qiguang Chen, Xiao Xu, Wanxiang Che, & Libo Qin. [A Preliminary Evaluation of ChatGPT for Zero-shot Dialogue Understanding](https://arxiv.org/abs/2304.04256). *arXiv:2304.04256*.
+- <a id="zh-ref-rana-2025"></a>**Rana et al. (2025).** Mansi Rana, Kadri Hacioglu, Sindhuja Gopalan, & Maragathamani Boothalingam. [Zero-shot Slot Filling in the Age of LLMs for Dialogue Systems](https://aclanthology.org/2025.coling-industry.59/). *COLING 2025 Industry Track*.
+- <a id="zh-ref-rastogi-2020"></a>**Rastogi et al. (2020).** Abhinav Rastogi, Xiaoxue Zang, Srinivas Sunkara, Raghav Gupta, & Pranav Khaitan. [Towards Scalable Multi-Domain Conversational Agents: The Schema-Guided Dialogue Dataset](https://arxiv.org/abs/1909.05855). *AAAI 2020*.
+- <a id="zh-ref-sainz-2024"></a>**Sainz et al. (2024).** Oscar Sainz, Iker García-Ferrero, Rodrigo Agerri, Oier Lopez de Lacalle, German Rigau, & Eneko Agirre. [GoLLIE: Annotation Guidelines improve Zero-Shot Information-Extraction](https://arxiv.org/abs/2310.03668). *ICLR 2024*.
+- <a id="zh-ref-shah-2019"></a>**Shah et al. (2019).** Darsh Shah, Raghav Gupta, Amir Ali Fayazi, & Dilek Hakkani-Tür. [Robust Zero-Shot Cross-Domain Slot Filling with Example Values](https://aclanthology.org/P19-1547/). *ACL 2019*.
+- <a id="zh-ref-siddique-2021"></a>**Siddique et al. (2021).** A. B. Siddique, Fuad Jamour, Luxun Xu, & Vagelis Hristidis. [Generalized Zero-shot Intent Detection via Commonsense Knowledge](https://arxiv.org/abs/2102.02925). *SIGIR 2021*.
+- <a id="zh-ref-song-2025"></a>**Song et al. (2025).** Mengxiao Song, Tingwen Liu, Quangang Li, Duohe Ma, Ming Sun, & Ling Tian. [Zero-Shot Cross-Domain Slot Filling with Retrieval Augmented In-Context Learning](https://dblp.org/rec/conf/icassp/SongLLMST25). *ICASSP 2025*, pp. 1–5.
+- <a id="zh-ref-tavares-2023"></a>**Tavares et al. (2023).** Diogo Tavares et al. [Task Conditioned BERT for Joint Intent Detection and Slot-filling](https://arxiv.org/abs/2308.06165). *arXiv:2308.06165*.
+- <a id="zh-ref-xu-2024"></a>**Xu et al. (2024).** Canwen Xu, Yichong Xu, Shuohang Wang, Yang Liu, Chenguang Zhu, & Julian McAuley. [Small Models are Valuable Plug-ins for Large Language Models](https://aclanthology.org/2024.findings-acl.18/). *Findings of ACL 2024*.
+- <a id="zh-ref-yan-2022"></a>**Yan et al. (2022).** Yang Yan, Junda Ye, Zhongbao Zhang, & Liwen Wang. [AISFG: Abundant Information Slot Filling Generator](https://aclanthology.org/2022.naacl-main.308/). *NAACL 2022*, pp. 4180–4187.
+- <a id="zh-ref-yang-2025"></a>**Yang et al. (2025).** An Yang, Junyang Lin, Jingren Zhou, et al. [Qwen3 Technical Report](https://arxiv.org/abs/2505.09388). *arXiv:2505.09388*.
+- <a id="zh-ref-yao-2024"></a>**Yao et al. (2024).** Yao Yao, Zuchao Li, & Hai Zhao. [GKT: A Novel Guidance-Based Knowledge Transfer Framework For Efficient Cloud-edge Collaboration LLM Deployment](https://arxiv.org/abs/2405.19635). *Findings of ACL 2024*, pp. 3433–3446.
+- <a id="zh-ref-yoran-2024"></a>**Yoran et al. (2024).** Ori Yoran, Tomer Wolfson, Ori Ram, & Jonathan Berant. [Making Retrieval-Augmented Language Models Robust to Irrelevant Context](https://arxiv.org/abs/2310.01558). *ICLR 2024*.
+- <a id="zh-ref-yu-2021"></a>**Yu et al. (2021).** Mengshi Yu, Jian Liu, Yufeng Chen, Jinan Xu, & Yujie Zhang. [Cross-Domain Slot Filling as Machine Reading Comprehension](https://www.ijcai.org/proceedings/2021/). *IJCAI 2021*, pp. 3992–3998.
+- <a id="zh-ref-zhang-2023"></a>**Zhang & Zhang (2023).** Junwen Zhang & Yin Zhang. [HierarchicalContrast: A Coarse-to-Fine Contrastive Learning Framework for Cross-Domain Zero-Shot Slot Filling](https://aclanthology.org/2023.findings-emnlp.965/). *Findings of EMNLP 2023*, pp. 14483–14503.
+- <a id="zh-ref-zhang-2024"></a>**Zhang et al. (2024).** Tianjun Zhang, Shishir G. Patil, Naman Jain, Sheng Shen, Matei Zaharia, Ion Stoica, & Joseph E. Gonzalez. [RAFT: Adapting Language Model to Domain Specific RAG](https://arxiv.org/abs/2403.10131). *arXiv:2403.10131*.
+- <a id="zh-ref-zhao-2022"></a>**Zhao et al. (2022).** Jeffrey Zhao, Raghav Gupta, Yuan Cao, Dian Yu, Mingqiu Wang, Harrison Lee, Abhinav Rastogi, Izhak Shafran, & Yonghui Wu. [Description-Driven Task-Oriented Dialog Modeling](https://arxiv.org/abs/2201.08904). *arXiv:2201.08904*.
+- <a id="zh-ref-zhu-2024"></a>**Zhu et al. (2024).** Zhihong Zhu, Xuxin Cheng, Hao An, Zhichang Wang, Dongsheng Chen, & Zhiqi Huang. [Zero-Shot Spoken Language Understanding via Large Language Models: A Preliminary Study](https://aclanthology.org/2024.lrec-main.1554/). *LREC-COLING 2024*.

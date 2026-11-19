@@ -2,27 +2,37 @@
 import ResearchPlot from './ResearchPlot.astro';
 import data from '@/data/stubborn-slot-filling.json';
 
+interface Props {
+  lang?: 'zh' | 'en';
+}
+
+const { lang = 'en' } = Astro.props;
+const isZh = lang === 'zh';
+const idPrefix = isZh ? 'zh-' : '';
+const stepKey = (step: number) => (isZh ? `第 ${step} 步` : `Step ${step}`);
+
 // Each row is [training step, conflict controllability %, noise robustness %].
 ---
 
 <div class="plots">
   {Object.entries(data.trajectory).map(([cohort, rows]) => (
     <ResearchPlot
-      id={`trajectory-${cohort}`}
-      title={`${cohort === 'seen' ? 'Seen' : 'Unseen'} target slots`}
-      xLabel="Training step"
-      yLabel="Slot pairs (%)"
+      lang={lang}
+      id={`${idPrefix}trajectory-${cohort}`}
+      title={isZh ? (cohort === 'seen' ? '已见目标槽位' : '未见目标槽位') : `${cohort === 'seen' ? 'Seen' : 'Unseen'} target slots`}
+      xLabel={isZh ? '训练步数' : 'Training step'}
+      yLabel={isZh ? '槽位对比例 (%)' : 'Slot pairs (%)'}
       xDomain={[0, 2700]}
       xTicks={[0, 500, 1000, 1500, 2000, 2500]}
       yTicks={[0, 20, 40, 60, 80, 100]}
       series={[
         {
-          label: 'Conflict controllability', tone: 'main',
-          points: rows.map(([x, y]) => ({ x, y, key: `Step ${x}`, value: `${y.toFixed(2)}%` })),
+          label: isZh ? '冲突可控性' : 'Conflict controllability', tone: 'main',
+          points: rows.map(([x, y]) => ({ x, y, key: stepKey(x), value: `${y.toFixed(2)}%` })),
         },
         {
-          label: 'Noise robustness', tone: 'blue',
-          points: rows.map(([x, , y]) => ({ x, y, key: `Step ${x}`, value: `${y.toFixed(2)}%` })),
+          label: isZh ? '噪声鲁棒性' : 'Noise robustness', tone: 'blue',
+          points: rows.map(([x, , y]) => ({ x, y, key: stepKey(x), value: `${y.toFixed(2)}%` })),
         },
       ]}
     />
