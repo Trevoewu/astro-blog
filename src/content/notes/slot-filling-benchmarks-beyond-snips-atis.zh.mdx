@@ -1,0 +1,322 @@
+---
+title: "超越 SNIPS 与 ATIS：大语言模型时代的槽位填充（Slot Filling）基准全景指南"
+pubDate: 2026-11-22 22:00:00
+description: "从趋于饱和的单轮 SLU 到零样本多轮 DST 与函数调用——精选核心数据集深度拆解、SOTA 口径避坑与交互式基准地图。"
+lang: zh
+translationOf: slot-filling-benchmarks-beyond-snips-atis
+published: true
+---
+
+import SlotBenchmarkMatrix from "../../components/charts/SlotBenchmarkMatrix.astro";
+
+## 1. 导读：为什么槽位填充并没有“被解决”
+
+如果你最近做过口语语言理解（SLU）或结构化抽取的实验，大概率会听到一种流行论调：“SNIPS 和 ATIS 的全监督 F1 早就卷到 95%–98% 了，大语言模型（LLM）一出，槽位填充（Slot Filling）早就成了已解决的问题。”
+
+然而，正如[我们在 SNIPS 与 ATIS 上的实证研究](/notes/robust-yet-stubborn-slot-filling)所揭示的，一旦离开“训练与测试共享同一套标注规范”的全监督舒适区，转向**零样本跨领域迁移**、**多语种与口语识别（ASR）噪声**、**嵌套组合式语义结构**，或是**多轮对话状态追踪（DST）与工具调用**，模型的表现会立刻出现断崖式滑坡——不仅紧凑型微调模型会因源域先验而变得“鲁棒却固执”，前沿闭源 LLM 在严格边界、层级角色与跨轮状态一致性上同样频频翻车。
+
+本文是一份面向**零样本/跨领域与 LLM 评测视角**的槽位填充基准全景指南。为了避免把读者淹没在数十个数据集的冗长清单中，全文采用**渐进式展开**结构：先给出任务选型速查表与可交互筛选的基准全景矩阵，再拆解阅读 SOTA 榜单最容易踩的三个口径陷阱，随后精选 **6 组核心单轮基准**与 **4 组核心多轮 DST 基准**做统一格式的深度剖析，接着用紧凑总表收束更广阔的数据集版图与常见误用（如 Banking77、CLINC150），最后把经典槽位填充一路延伸至当代 LLM 函数调用（Function Calling）评测。
+
+### 我该选哪个数据集？速查决策表
+
+| 你的研究问题 / 评测目标 | 首选核心基准 | 建议搭配对照 | 避坑提醒 |
+| :--- | :--- | :--- | :--- |
+| **零样本跨领域槽位迁移与边界规范诊断** | **SNIPS**（LODO 留一领域）+ **ATIS**（SNIPS → ATIS） | **MIT Restaurant / Movie**（非命名实体描述性边界） | 切勿把 SNIPS 域内标准切分与留一领域（LODO）混为一谈 |
+| **跨语种零样本迁移与非拉丁文字切分** | **MASSIVE**（51 语种扁平槽位） | **MTOP**（6 语种嵌套树）、**MultiATIS++**（9 语种角色槽位） | 高资源语种的意图准确率会掩盖低资源语种的严格片段 F1 暴跌 |
+| **真实语音、ASR 级联误差与端到端语音大模型** | **SLURP**（音频+文本，含 `SLU-F1`） | **STOP**（大规模口语嵌套树）、**DSTC2**（多轮 ASR N-best） | 用纯精确匹配 F1 评口语专有名词过于严苛，应结合 `SLU-F1` 诊断 |
+| **突破扁平 BIO 的嵌套/组合式语义与少样本适应** | **TOPv2**（含 25 SPIS 低资源切分） | **MTOP**（多语种嵌套）、**STOP**（口语嵌套） | 评测指标是严格树 Exact Match（EM），括号或嵌套层级错一处即零分 |
+| **零样本动态 API / Schema 驱动的多轮状态追踪** | **SGD**（测试集约 69.6% 含未见服务） | **MultiWOZ 2.4**（干净测试集多域对话） | SGD 测试集自带大量未见 API，但全量测试对闭源 LLM API 成本很高 |
+| **多轮跨领域状态演进与噪声鲁棒性** | **MultiWOZ 2.4**（干净验证/测试集） | **MultiWOZ 2.2**（标准抽取式 schema）、**RADDLE**（鲁棒性压力测试） | **绝对不要**跨版本比较 MultiWOZ（v2.1 与 v2.4 同模型相差 10–19 分） |
+| **极低资源真实商业对话与单轮上下文消歧** | **Restaurant8k**（8 级减半少样本切分） | **SNIPS** 少样本 / **TOPv2** 25 SPIS | 许多回复只有单个数字或短词，不给上轮 `requestedSlots` 根本无法消歧 |
+| **中文槽位填充与中文多轮任务型对话** | **CrossWOZ** / **RiSAWOZ**（多轮） | **CAIS** / **SMP2019-ECDT**（单轮）、**BiToD**（中英双语） | **SMP2017 Task 1 没有槽位标注**（仅意图），做槽位必须用 **SMP2019-ECDT** |
+| **面向 Agent 的嵌套 JSON 与闭环工具调用** | **BFCL**（AST + 执行验证 + 无关拒答） | **FnCTOD**（DST 转函数调用）、**ToolBench**（万级真实 API） | 重点同时观察不可调用/缺参拒答率，避免模型靠幻觉填满可选参数 |
+
+---
+
+## 2. 交互式基准全景矩阵
+
+在进入正文深度拆解之前，你可以先通过下方交互式矩阵俯瞰全文覆盖的所有基准：支持按**单轮 / 多轮**、**精选深度 / 扩展全景**、**语言**以及能力标签（如 `zero-shot`、`nested`、`spoken-asr`、`dst` 等）实时组合筛选，点击任意条目即可就地展开代表性 SOTA 口径、优缺点与核心文献。
+
+<SlotBenchmarkMatrix lang="zh" />
+
+---
+
+## 3. 读懂 SOTA 前的三点防坑指南
+
+槽位填充与对话状态追踪（DST）领域的论文跨度超过三十年，数字极易被张冠李戴。在横向比较任何榜单成绩前，请务必先核对以下三条口径：
+
+1. **评测范式不可混比（全监督 vs 留一零样本 vs 纯 LLM 提示）**：
+   同一数据集在不同设定下的分数可能相差 40 个百分点以上。例如在 **SNIPS** 上，全监督微调的 JointBERT 早已达到 **97.08%** Span F1（[Chen et al., 2019](#zh-ref-chen-2019)），但在留一领域（Leave-One-Domain-Out, LODO）零样本迁移下，经典基线 Coach+TR 在未见槽位上仅得 **34.09%** F1（[Liu et al., 2020](#zh-ref-liu-2020)），纯单阶段零样本提示的 ChatGPT 在域内测试集上也仅约 **55.7%–58.2%**（[Pan et al., 2023](#zh-ref-pan-2023)；[Zhu et al., 2024](#zh-ref-zhu-2024)）。多轮场景中的口径陷阱更隐蔽：在 **MultiWOZ** 上，如果按留一领域方式每次只评**单个留出域**的槽位，ChatGPT 零样本平均 JGA 可达 **77.58%**（MultiWOZ 2.0，[Feng et al., 2023](#zh-ref-feng-2023)）；但一旦改为**五个领域全部 30 个槽位联合评测**，ChatGPT 在 MultiWOZ 2.1 测试集上的零样本 JGA 便骤降至 **31.5%**（[Heck et al., 2023](#zh-ref-heck-2023)）。
+
+2. **指标严苛度天差地别（Span F1 vs `SLU-F1` vs Tree EM vs JGA）**：
+   - **Span F1**（单轮主流）要求预测的槽位类型与起止边界严格一致，但对不同槽位分开计分，具备一定容错度。
+   - **`SLU-F1`**（[SLURP](#zh-ref-bastianelli-2020) 引入）按词级与字符级编辑距离对槽位值加权，用于在有 ASR 识别错字的语音任务中剥离声学失真与语义误标。
+   - **Tree Exact Match（EM）**（TOPv2 / MTOP）要求整棵嵌套语义树——包括每个意图、槽位与括号边界——完全一致才算 1 分。
+   - **Joint Goal Accuracy（JGA）**（多轮 DST 主流）最为苛刻：当前轮次必须同时完全命中**从第 1 轮累积至今的所有活跃 `domain-slot → value` 键值对**才算正确。哪怕漏掉一个三轮前提到的继承槽位，或把 `"centre"` 拼成 `"center"`，整轮直接记零——因此单槽 F1 超过 90% 时，JGA 仍常常落在 30%–60%。
+
+3. **版本、切分与隐性设定陷阱**：
+   - **MultiWOZ 版本鸿沟**：MultiWOZ 2.4 仅彻底重标了验证集与测试集（训练集保持不变），结果同一批模型在 v2.4 上的 JGA 相比 v2.1 凭空高出 **10 到 19 个百分点**（例如 LDST 从 **60.65%** 跃升至 **79.94%**，[Ye et al., 2022](#zh-ref-ye-2022)；[Feng et al., 2023](#zh-ref-feng-2023)）。脱离版本号谈 MultiWOZ SOTA 毫无意义。
+   - **SGD 的“内置零样本”属性**：SGD 测试集约 **69.6%** 的对话包含训练集从未见过的服务/API（[Rastogi et al., 2020](#zh-ref-rastogi-2020)）。因此“在 SGD 训练集上全量监督微调”评测的其实已经是强大的跨 schema 零样本泛化，与“完全不看 SGD 训练集的纯零样本 LLM 提示”属于两种截然不同的协议。
+   - **传统语料的微调仓库差异**：ATIS 在不同开源预处理脚本中存在轻微统计差异（如 79 vs 83 种槽位、120 vs 127 个 BIO 标签、18–26 个意图），复现对照时应统一采用 [Goo et al. (2018)](#zh-ref-goo-2018) 确立的标准切分（4,478 / 500 / 893）。
+
+---
+
+## 4. 精选深度拆解：单轮槽位填充基准
+
+本节精选 6 组最具代表性的单轮基准：从最经典的扁平/层级锚点（SNIPS、ATIS）出发，依次拓展到超大规模多语种（MASSIVE）、真实语音声学（SLURP）、嵌套组合语义（TOPv2 / MTOP）以及垂直领域的非命名实体边界测试（MIT Restaurant & Movie）。
+
+### 4.1 SNIPS：多域扁平槽位的经典锚点与 LODO 试金石
+
+> **规格速览**：[Coucke et al. (2018)](#zh-ref-coucke-2018) ｜ 英语 ｜ 14,484 句（13,084 训练 / 700 验证 / 700 测试）｜ 7 领域（与 7 意图一一对应）｜ 39 种扁平槽位（72 个 BIO 标签）
+
+- **为何对零样本 / LLM 评测重要**：SNIPS 的 7 个语音助手领域（`AddToPlaylist`、`BookRestaurant`、`GetWeather`、`PlayMusic`、`RateBook`、`SearchCreativeWork`、`SearchScreeningEvent`）之间共享一部分通用槽位名，同时又各有专有槽位。在标准的**留一领域（LODO）**划分下（[Liu et al., 2020](#zh-ref-liu-2020)），每个目标域都天然混合了“源域已见槽位”与“目标域未见槽位”。更重要的是，SNIPS 暴露了零样本抽取中最隐蔽的**标注规范可识别性缺口**：由于抽取式标注要求从原句复制子串，某些领域会把日常代词或指示词标成实体（如 `playlist_owner="my"`、`object_select="this"`、`current_location="here"`），而其他源域把它们视作背景词。源域微调模型会学到极强的词级拒斥先验，而纯零样本 LLM 仅凭简短槽位名又无法猜出这套隐含规范（详见[姊妹篇实证分析](/notes/robust-yet-stubborn-slot-filling)）。
+- **代表性 SOTA（严格口径）**：
+  - *全监督域内测试（已饱和，约 97%–98% Span F1）*：JointBERT **97.08%** Slot F1（[Chen et al., 2019](#zh-ref-chen-2019)）；Stack-Propagation **94.20%** Slot F1（[Qin et al., 2019](#zh-ref-qin-2019)）。
+  - *零样本跨领域（7 领域 LODO 平均 F1）*：Coach+TR 未见槽位 **34.09%** / 已见槽位 **51.93%**（[Liu et al., 2020](#zh-ref-liu-2020)）；GZPL 逆向提示 **55.76%** 基础版至 **61.07%**（[Li et al., 2023](#zh-ref-li-2023)）；SynAug **68.54%**（[Li et al., 2025](#zh-ref-li-2025-synaug)）；在我们[姊妹篇实证研究](/notes/robust-yet-stubborn-slot-filling)的 LODO 评测中，冻结前沿顾问（`DeepSeek-V4-Flash`）单独达 **69.24%** F1，与源域微调的 `Qwen3-8B` 协同后达 **79.69%** F1。
+  - *纯零样本 LLM 提示（域内标准测试集，非 LODO）*：原生单阶段 ChatGPT 提示仅约 **55.7%–58.2%** Slot F1（[Pan et al., 2023](#zh-ref-pan-2023)；[Zhu et al., 2024](#zh-ref-zhu-2024)）；多阶段问答式提示 `GPT-SLU` 可将 `text-davinci-003` 拉升至 **90.03%** F1（[Zhu et al., 2024](#zh-ref-zhu-2024)）。
+- **优势与局限**：优势在于切分规整、跨领域实验协议成熟、历史文献对照最全；局限在于词表偏小、众包句式模板感较强、全监督早已饱和，且缺乏显式槽位定义说明。
+
+### 4.2 ATIS：角色限定层级 Schema 的试炼场
+
+> **规格速览**：[Hemphill et al. (1990)](#zh-ref-hemphill-1990)（标准切分 [Tur et al., 2010](#zh-ref-tur-2010)；[Goo et al., 2018](#zh-ref-goo-2018)）｜ 英语 ｜ 5,871 句（4,478 / 500 / 893）｜ 1 领域（航班查询）｜ 21 意图（变体 18–26）｜ 79 种槽位 / 120 个 BIO 标签（部分版本 83 / 127）
+
+- **为何对零样本 / LLM 评测重要**：与 SNIPS 的扁平槽位不同，ATIS 采用**带语义角色前缀的点分层级命名**（如 `fromloc.city_name`、`toloc.city_name`、`depart_time.time_relative`），同时又保留了无前缀的基础槽位（如 `city_name`）。这使其成为检验 **Schema 层级先验冲突**的理想基准：任何在扁平 schema（如 SNIPS）上微调过的模型，在零样本迁移到 ATIS（100% 未见槽位）时都会表现出系统性的“角色槽位坍缩”，把本应填入 `fromloc.city_name` 的片段强行挪入通用的 `city_name`——这一单类错误在我们[姊妹篇](/notes/robust-yet-stubborn-slot-filling)的 SNIPS → ATIS 实验中占到了全部流失实体的 **91.6%**。
+- **代表性 SOTA（严格口径）**：
+  - *全监督域内测试（已饱和，约 95.7%–96.5%+ Span F1）*：JointBERT **95.75%** Slot F1（[Chen et al., 2019](#zh-ref-chen-2019)）；Stack-Propagation **95.90%** Slot F1（[Qin et al., 2019](#zh-ref-qin-2019)）。
+  - *纯零样本 LLM 提示（域内测试集）*：面对 79 种细粒度角色槽位，单阶段 ChatGPT 提示波动剧烈，仅得 **15.71%–58.24%** F1（[Pan et al., 2023](#zh-ref-pan-2023)；[Zhu et al., 2024](#zh-ref-zhu-2024)）；采用多阶段问答解耦的 `GPT-SLU`（[Zhu et al., 2024](#zh-ref-zhu-2024)）可将域内测试集 F1 提升至 **97.71%**（`gpt-3.5-turbo`）和 **98.00%**（`text-davinci-003`）。
+  - *跨数据集零样本（SNIPS → ATIS，100% 未见槽位）*：在[姊妹篇实证研究](/notes/robust-yet-stubborn-slot-filling)中，裸顾问本身可达 **77.60%** F1，但与 SNIPS 源域微调的 `Qwen3-8B` 结合后反跌至 **66.91%** F1；引入确定性的同族槽位门控后恢复至 **78.46%** F1。
+- **优势与局限**：优势是源自真实的口语 Wizard-of-Oz 航班查询、语义角色区分极细；局限是单领域且年代久远、意图极度偏斜（`atis_flight` 占绝大多数），且不同仓库存在轻微标签数不一致。
+
+### 4.3 MASSIVE：51 种语言的大规模平行槽位基准
+
+> **规格速览**：[FitzGerald et al. (2023)](#zh-ref-fitzgerald-2023) ｜ 51 语种（v1.0；v1.1 增至 52 种含加泰罗尼亚语），覆盖 29 个语属 ｜ 逾 100 万条平行文本（每语种 19,521 句：约 11,514 训练 / 2,039 验证 / 2,980 测试 + 约 3,000 MMNLU-22 留出集）｜ 18 领域 ｜ 60 意图 ｜ 55 种扁平槽位
+
+- **为何对零样本 / LLM 评测重要**：MASSIVE 是由英文 SLURP 经过**人工文化本地化**（替换当地人名、地名与日期习惯，而非生硬机翻）构建的百万级平行 NLU 语料，横跨拉丁、西里尔、阿拉伯、中日韩、天城文、阿姆哈拉、泰语、高棉语等多样书写系统。它无情地揭示了跨语种迁移中**意图与槽位的巨大分化**：仅在英语（`en-US`）上训练并零样本迁移到其他 50 种语言时，多语种编码器还能维持约七成意图准确率，但严格片段 Slot F1 会出现**超过 33 个百分点的断崖下跌**——在黏着语形态变化、无空格分词（中日韩、泰语、高棉语）及 LLM 分词器文字失衡的多重夹击下，低资源语种的边界精确度至今仍是硬骨头。
+- **代表性 SOTA（严格口径，51 语种测试集均值，[FitzGerald et al., 2023](#zh-ref-fitzgerald-2023)）**：
+  - *全语种联合微调（51 语种全量训练）*：XLM-R Base **83.6 ± 0.2%** Slot F1（85.1% Intent Acc）；mT5 Base 编码器架构 **82.2 ± 0.2%** Slot F1；mT5 Base 文本到文本 **81.3 ± 0.2%** Slot F1。
+  - *零样本跨语种迁移（仅 `en-US` 训练 → 非英语语种均值）*：XLM-R Base 骤降至 **50.3 ± 0.1%** Slot F1（70.6% Intent Acc）；mT5 Base 降至 **44.8 ± 0.1%**（编码器版）/ **41.6 ± 0.1%**（文本到文本版）Slot F1。
+  - *LLM 评测现状注记*：原论文发表早于 GPT-4；受限于 51 语种全量推理成本与分词差异，全语种零样本 LLM 的严格 Slot F1 基准依然稀缺。已有跨语种大模型评测（如 MEGA / MEGAVERSE）普遍显示，零样本 LLM 在高资源语种的意图分类上已颇具竞争力，但在低资源与非拉丁文字的严格词元级 Slot F1 上仍明显落后于微调编码器。
+- **优势与局限**：优势在于 51 语种平行规模空前、本地化质量高、与 SLURP 的 18 领域本体直接对齐；局限在于非英语语种仅含文本不含音频、仍为单轮扁平槽位，且任务分布底色仍偏西方智能音箱场景。
+
+### 4.4 SLURP：打通真实语音、ASR 误差与文本 NLU 的桥梁
+
+> **规格速览**：[Bastianelli et al. (2020)](#zh-ref-bastianelli-2020) ｜ 英语（多元母语与非母语口音）｜ 72,277 条真实录音（34,603 近场头戴 + 37,674 远场，约 58 小时）对应 16,520 条唯一文本 ｜ 18 领域 ｜ 46 动作（69 组合意图；对齐 MASSIVE 为 60 意图）｜ 55 种槽位
+
+- **为何对零样本 / LLM 评测重要**：现实语音助手的槽位填充从来不是在干净文本上运行的。SLURP 同时提供真实多口音远近场音频与高质量文本标注，词表与实体多样性（人名、影音标题、智能家居指令）远超 SNIPS 和 ATIS，并专门提出了 **`SLU-F1`** 指标（按词级与字符级编辑距离加权），得以量化声学转写失真与语义槽位误标各自造成的损失。对比显示，即便在全监督下，经典级联 `ASR + NLU` 相比理想真值文本的 `Oracle NLU` 仍有**约 14 个百分点的巨大落差**；而在 Speech-LLM 时代，如何直接从带噪声的声学信号里零样本泛化到未见槽位类型且不编造实体，成为全新的前沿考题。
+- **代表性 SOTA（严格口径，均以 `SLU-F1` 计）**：
+  - *全监督文本上限 vs 传统级联基线（[Bastianelli et al., 2020](#zh-ref-bastianelli-2020)）*：真值文本 Oracle NLU **84.3%–84.8%** SLU-F1；级联 ASR + NLU 基线 **70.2%–70.8%** SLU-F1。
+  - *全监督端到端语音 SLU（当前饱和区间约 75%–79% SLU-F1）*：ESPnet-SLU Conformer **71.40%** SLU-F1（86.30% Intent Acc）；Branchformer **77.7%** SLU-F1（[Peng et al., 2022](#zh-ref-peng-2022)）；SpeechBrain HuBERT-large **78.96%** SLU-F1（89.37% Intent Acc）。
+  - *零样本口语 SLU（留出 5 类未见槽位）*：ZS-Whisper-SLU **46.8%** SLU-F1（Interspeech 2024）；基于 Whisper + Llama-3 的 WHISMA 基础版 **59.4%** SLU-F1，结合结构化思维链（SCoT）与多轮提示后可达 **73.7%–78.0%** SLU-F1（IEEE SLT 2024）。
+- **优势与局限**：优势是连接纯文本 NLU 与真实声学 SLU 的黄金数据集，`SLU-F1` 诊断价值极高；局限在于仅限英语单轮，且遇到集外（OOV）专有名词时若不使用 `SLU-F1` 会显得过于严苛。
+
+### 4.5 TOPv2 与 MTOP：嵌套组合式槽位与低资源 / 多语种语义解析
+
+> **规格速览**：**TOPv2**（[Chen et al., 2020](#zh-ref-chen-2020)）：英语 ｜ 约 180,000 句 ｜ 8 领域 ｜ 80 意图 ｜ 82 槽位（含 25 SPIS 低资源切分）。**MTOP**（[Li et al., 2021](#zh-ref-li-2021)）：6 语种（英、西、法、德、印地、泰语）｜ 约 100,000 句 ｜ 11 领域 ｜ 117 意图 ｜ 78 槽位（各语种约 70/10/20 切分）。
+
+- **为何对零样本 / LLM 评测重要**：扁平 BIO 标注存在天然表达天花板——遇到“提醒我给妈妈发消息说今晚不回家吃饭”这类复合指令时，一个槽位（`SL:TODO`）内部必须递归包裹子意图（`IN:SEND_MESSAGE`）与子槽位（`[IN:SET_REMINDER [SL:TODO [IN:SEND_MESSAGE ...]]]`）。TOPv2 与 MTOP 彻底打破了扁平假设：前者以 **25 SPIS**（每个意图与槽位仅 25 条标注样本）定义了极其干净的少样本域适应协议，后者把嵌套语义解析拓展到 6 种类型学迥异的语言。对于序列标注模型而言，嵌套树根本无法表示；对于零样本/少样本 LLM 而言，括号配对漂移、漏掉深层子意图或擅自把递归从句“拍扁”成单层参数，都是高频失效模式。
+- **代表性 SOTA（严格口径，均以严格树 Exact Match [EM] 计）**：
+  - *TOPv2 全监督（8 领域饱和区间约 86%–87.5% EM）*：Seq2Seq BART / Span-Pointer / 检索增强解析器可达 **87.0%–87.52%** EM。
+  - *TOPv2 低资源域适应（25 SPIS，[Chen et al., 2020](#zh-ref-chen-2020)）*：BART-CopyPtr 微调在嵌套复杂的 Reminder 域仅得 **68.0%** EM，而在相对扁平的 Weather 域达 **75.9%** EM；结合元学习 Reptile（MAML）后分别升至 **70.5%**（Reminder）与 **77.7%**（Weather）——嵌套深度直接带来超过 7 个百分点的难度差。
+  - *MTOP 全监督与跨语种零样本（[Li et al., 2021](#zh-ref-li-2021)）*：英语全监督约 **85.0%–86.4%** EM（XLM-R / BART / mT5）；零样本跨语种迁移（仅英语训练 → 其余 5 语种测试）中，XLM-R 基线在扁平/跨语种平均约 **67.2%** EM，但在非拉丁文字（印地语、泰语）的解耦组合式零样本迁移上，若不借助机翻与槽位投影，准确率会跌至英语水平的约 35%–65%。
+- **优势与局限**：优势在于直击组合式嵌套结构与严格的少样本/多语种泛化；局限是严格树 EM 对微小边界或括号差异零容忍，需要 seq2seq 或受限结构化解码，且 TOPv2 本身仅限英语。
+
+### 4.6 MIT Restaurant 与 MIT Movie：垂直领域与非命名实体边界难题
+
+> **规格速览**：[Liu et al. (2013a, ICASSP)](#zh-ref-liu-2013-rest)；[Liu et al. (2013b, ASRU)](#zh-ref-liu-2013-movie) ｜ 英语 ｜ 无意图标签，纯扁平 BIO 槽位抽取。**MIT Restaurant**：7,660 训练 / 1,521 测试，8 槽位；**MIT Movie `eng`**（简单查询）：9,775 / 2,443，12 槽位；**MIT Movie `trivia10k13`**（复杂影迷问答）：7,816 / 1,953，12 槽位。
+
+- **为何对零样本 / LLM 评测重要**：这两组轻巧的垂直领域基准近年在零样本开放信息抽取（Open-IE）与零样本 NER 评测中焕发了“第二春”。原因极其鲜明：LLM 预训练知识与经典命名实体（如 `Actor`、`Director`、`Location`）高度契合，但面对 MIT 语料里大量**非命名实体的描述性槽位**（如餐馆的 `Amenity`、`Hours`、`Price`，电影的 `Plot`、`Opinion`、`Quote`）时，仅凭槽位名完全无法界定修饰语、介词或长从句究竟该切到哪里，导致未经规范指导的零样本 LLM 遭遇灾难性暴跌。
+- **代表性 SOTA（严格口径，实体级 Span F1）**：
+  - *全监督微调（饱和区间约 90%–95%+ Span F1）*：BERT / RoBERTa-large 微调即可稳定达到 **90%–95%+**（其中 `trivia10k13` 因包含 `Plot`、`Quote`、`Opinion` 等长描述片段而明显更具挑战）。
+  - *零样本 LLM 与开放抽取模型（严格实体 F1；汇总自 [Zaratiana et al., NAACL 2024](#zh-ref-zaratiana-2024) 与 [Zhou et al., ICLR 2024](#zh-ref-zhou-2024)）*：
+    - ChatGPT（`gpt-3.5`）纯零样本：MIT Movie 仅 **5.3%** F1，MIT Restaurant **32.8%** F1；
+    - UniversalNER（`UniNER-7B`）：MIT Movie **42.4%** F1，MIT Restaurant **31.7%** F1；
+    - GLiNER-L：MIT Movie **57.2%** F1，MIT Restaurant **42.9%** F1；
+    - 规范驱动的 GoLLIE（[Sainz et al., ICLR 2024](#zh-ref-sainz-2024)）进一步证明，向模型提供显式标注指南（而非干巴巴的槽位名）才是破局关键，在综合零样本 IE 评测集上取得约 **55.3%** 的平均表现。
+- **优势与局限**：优势在于轻量干净、对“描述性边界歧义”的放大效应极强；局限在于不含意图标签、原句为全小写无标点的众包搜索查询，且 `Plot` 与 `Genre`、`Amenity` 与 `Cuisine` 等边界本身带有一定主观性。
+
+---
+
+## 5. 从单轮槽位填充到多轮 DST：四个关键跃迁
+
+当我们把视线从单句语音助手移向真实的多轮任务型对话（Task-Oriented Dialogue, TOD），槽位填充就演变成了**对话状态追踪（Dialogue State Tracking, DST）**。这绝不仅仅是“多跑几轮单句抽取”，而是任务范式的四次本质跃迁：
+
+1. **从局部片段标注到累积信念状态（Local Span Tagging → Cumulative Belief State）**：单轮 SLU 只需对当前孤立句子贴 BIO 标签；多轮 DST 则必须跨整段对话维护一张动态演化的 `domain-slot → value` 状态表——既要忠实继承前几轮已经确定的约束，又要在用户改主意时及时覆写旧值，不能遗忘也不能滞留过期信息。
+2. **从容错片段 F1 到“一错全零”的联合目标准确率（Span F1 → JGA）**：DST 的核心指标 **Joint Goal Accuracy（JGA）** 要求当前轮次下所有历史累积的活跃槽位键值对**全部同时命中**才计 1 分。哪怕整段对话里模型填对了 9 个槽位、只漏掉 1 个跨轮继承值或凭空多填 1 个槽位，该轮得分即刻归零——这正是为何单槽 F1 超过 90% 的模型在多轮 JGA 上往往只有 30%–60%。
+3. **从独立单句到隐式上下文、指代消解与省略补全（Context, Coreference & Ellipsis）**：真实对话中充斥着极短的碎片回复——例如用户只回了一句“*7*”或“*还是那个区域吧*”。脱离上下文，“*7*”究竟是就餐人数还是预约时间？唯有结合系统上一轮刚刚追问的槽位（`requestedSlots`）、前几轮提及的实体（指代消解 Coreference）以及口语中被省去的主宾语（省略 Ellipsis），槽位值才具备语义。
+4. **从封闭静态词表到自然语言描述驱动的动态 API Schema**：早期 DST 假设每个槽位只有寥寥几个固定候选值；现代多轮基准则明确区分**分类槽位（categorical，封闭枚举值表）**与**非分类槽位（non-categorical，开放式原文抽取片段）**，并为每个服务、意图与槽位配发自然语言描述，从而把状态追踪真正推进到面向未见 API 的零样本泛化赛道。
+
+---
+
+## 6. 精选深度拆解：多轮任务型对话（DST）基准
+
+围绕上述四个跃迁，本节精选 4 组最具代表性的多轮基准：从动态 schema 标杆（SGD）、最经典也最富版本教训的多域人机对话（MultiWOZ 2.0–2.4），到聚焦真实商业短回复上下文消歧的极低资源语料（Restaurant8k），以及中文多轮双璧（CrossWOZ 与 RiSAWOZ）。
+
+### 6.1 SGD（Schema-Guided Dialogue）：动态 API 零样本追踪的黄金标杆
+
+> **规格速览**：[Rastogi et al. (2020)](#zh-ref-rastogi-2020) ｜ 英语 ｜ 22,825 段对话（16,142 训练 / 2,482 验证 / 4,201 测试）、463,284 轮（场均约 20.3 轮）｜ 20 领域（16 / 16 / 18）｜ 45 个服务/API（26 / 17 / 21）｜ 训练集 214 种唯一槽位
+
+- **为何对零样本 / LLM 评测重要**：SGD 是首个把“零样本动态 API 泛化”写进数据集基因的多轮基准。其验证集约 **42%**、测试集约 **69.6%** 的对话都涉及训练集从未出现过的新服务/API（包括完全未见的新领域，如 *Messaging、Payment、Train*），甚至同一领域下并存多个 schema 略有差异的重叠服务。每个服务、意图与槽位都带有自然语言描述，并严格拆分**分类槽位**与**非分类原文片段槽位**——可以说，SGD 在结构上就是当代 LLM Function Calling 规范的直接前身。
+- **代表性 SOTA（严格口径，SGD 测试集 JGA）**：
+  - *原始基线*：基于 BERT 的 SGD-baseline 仅获 **25.4%** 总体 JGA（未见服务约 **20.0%**，[Rastogi et al., 2020](#zh-ref-rastogi-2020)）。
+  - *全量 Schema 驱动微调 SOTA（含内置约 70% 未见服务泛化）*：**D3ST-XXL（T5-11B）** 达到 **86.4%** 总体 JGA——其中已见服务 **95.8%**，未见服务高达 **83.3%**（[Zhao et al., 2022](#zh-ref-zhao-2022)）。
+  - *纯零样本 LLM 提示*：不经任务特定格式重构的直接提示在严格多轮 JGA 上仍颇为吃力；**FnCTOD**（[Li et al., ACL 2024](#zh-ref-li-2024-fnctod)）把对话 schema 重写为函数调用签名后，在包括 SGD/MultiWOZ 在内的 TOD/DST 基准上相比既有零样本提示基线平均提升 **+5.6% JGA**（其中 **GPT-4 提升 +14%**，**GPT-3.5 提升 +4.8%**）。需要留意的是，[Hudeček & Dušek (SIGDIAL 2023)](#zh-ref-hudecek-2023) 明确指出，SGD 测试集多达 4,201 段对话（84,594 轮），高昂的 API 成本使得完整的 GPT-4 / ChatGPT 全集评测至今稀缺。
+- **优势与局限**：优势在于零样本 schema 迁移设计最严谨、同域多 API 重叠贴近真实业务；局限在于采用“机机模拟生成骨架 + 众包改写（M2M）”流程，语气比真实人类对话略显模板化，且测试集庞大导致前沿 LLM 全量评测成本偏高。
+
+### 6.2 MultiWOZ（2.0 → 2.4）：最经典的实战多域 DST 与版本避坑教科书
+
+> **规格速览**：英语 ｜ 10,438 段人机 Wizard-of-Oz 对话（8,438 训练 / 1,000 验证 / 1,000 测试；单域约 3,406 段，跨 2–5 域多域对话约 7,032 段）、逾 115,400 轮 ｜ 7 领域（标准评测 5 域：*Restaurant, Hotel, Attraction, Taxi, Train*；*Hospital* 与 *Police* 仅见于训练集）｜ 标准 5 域 30 个活跃 `domain-slot` 对（v2.2 schema 总计 61 槽位 / 35 活跃槽位）
+
+由于 MultiWOZ 的版本演进直接决定了 SOTA 数字是否可比，下表先给出五个版本的精准对照：
+
+| 版本 | 年份与出处 | 核心改动与标注质量意义 |
+| :--- | :--- | :--- |
+| **MultiWOZ 2.0** | [Budzianowski et al. (EMNLP 2018)](#zh-ref-budzianowski-2018) | 奠基性多域人机 WoZ 语料；但存在严重标注噪声（约 40% 轮次存在状态错误、延迟标注或值未规范化）。 |
+| **MultiWOZ 2.1** | [Eric et al. (LREC 2020)](#zh-ref-eric-2020) | 重标了约 40% 轮次中的约 **32%** 状态标注，规范化槽位值并补全用户对话行为；但仍残留大量噪声。 |
+| **MultiWOZ 2.2** | [Zang et al. (NLP4ConvAI 2020)](#zh-ref-zang-2020) | 在 v2.1 基础上额外修正约 **17.3%** 话语的状态错误；效仿 SGD 重构为 61 总槽位/35 活跃槽位，显式区分**分类槽位（少于 50 值）**与带原文边界的**非分类槽位**。 |
+| **MultiWOZ 2.3** | [Han et al. (NLPCC 2021)](#zh-ref-han-2021) | 同步清洗对话行为与对话状态，并补充显式**指代消解标注**（如 *"the same area"*）。 |
+| **MultiWOZ 2.4** | [Ye et al. (SIGDIAL 2022)](#zh-ref-ye-2022) | **仅对验证集与测试集做彻底人工重标**（保留原始带噪训练集以检验抗噪学习能力）；一举揭示 v2.1 的测试噪声把模型真实 JGA 压低了 **10–19 个百分点**！ |
+
+- **为何对零样本 / LLM 评测重要**：MultiWOZ 是自然语言表达最贴近真人的多域 DST 试金石，核心难点集中在**跨领域实体继承**（例如用四轮前查到的餐厅地址去叫出租车）、指代消解，以及极其苛刻的**值规范化（canonicalization）**（如 `"dontcare"`、英美拼写 `"centre"` vs `"center"`、时间格式）——语义上完全正确的 LLM 经常因为格式差之毫厘而在精确匹配 JGA 上失分。同时，鉴于 MultiWOZ 在开源社区极其普及，评测前沿闭源 LLM 时还须警惕预训练数据污染风险。
+- **代表性 SOTA（严格口径，直观展示版本与协议差异）**：
+  - *全监督微调（同一模型、同一训练集，在 v2.1 噪声测试集 vs v2.4 干净测试集上的巨幅跳升）*：
+    - **STAR**：**56.36% JGA（v2.1）** → **73.62% JGA（v2.4）**（[Ye et al., SIGDIAL 2022](#zh-ref-ye-2022)）；
+    - **D3ST-XXL（11B）**：**57.80%（v2.1）** / **58.70%（v2.2）** / **75.90%（v2.4）**（[Zhao et al., 2022](#zh-ref-zhao-2022)；同期 v2.2 上 SDP-DST 为 57.60%、Event-DST 为 57.76%）；
+    - **LDST（LLaMA-7B 指令微调）**：**60.65% JGA（v2.1）** → **79.94% JGA（v2.4）**（[Feng et al., EMNLP 2023](#zh-ref-feng-2023)）。
+  - *少样本上下文学习（Few-Shot ICL）*：**IC-DST（GPT-3）** 从 **50.65%（v2.1）** 升至 **62.43%（v2.4）**（[Hu et al., 2022](#zh-ref-hu-2022)）。
+  - *纯零样本多域 LLM（全 5 域 30 槽位联合评测）*：**ChatGPT（GPT-3.5）** 在 **v2.1 测试集**仅获 **31.5% JGA**（[Heck et al., SIGDIAL 2023](#zh-ref-heck-2023)）；**FnCTOD（GPT-4 函数调用零样本）** 在 **v2.1** 达约 **38.71% JGA**（比原始提示提升 +14%，[Li et al., ACL 2024](#zh-ref-li-2024-fnctod)）。
+  - *留一领域单域零样本（MultiWOZ 2.0，每次仅评留出单域槽位的平均 JGA，[Feng et al., EMNLP 2023](#zh-ref-feng-2023) 表 9）*：**T5DST** **35.20%**、**LDST（LLaMA-7B）** **75.03%**、**ChatGPT** **77.58%**——与上面全 5 域联合的 31.5% 形成鲜明对照，堪称协议差异的绝佳教材。
+- **优势与局限**：优势在于文献基线最丰富、对话自然、版本体系支持严格的噪声对照研究；局限在于早期版本标注噪声大、剑桥旅游 5 域本体偏窄，且存在潜在的大模型预训练记忆风险。
+
+### 6.3 Restaurant8k：真实商业对话的极低资源抽取与上下文消歧
+
+> **规格速览**：[Coope et al. (ACL 2020)](#zh-ref-coope-2020) ｜ 英语 ｜ 11,929 条真实用户话语（8,198 训练 / 3,731 测试），官方提供 8 级逐次减半的少样本子集（从 `train_1`=4,099 一直到 `train_8`=32，含 `1/64`=128、`1/128`=64）｜ 1 领域（商业餐馆预订）｜ 5 种抽取式槽位（`date`, `time`, `people`, `first_name`, `last_name`）
+
+- **为何对零样本 / LLM 评测重要**：Restaurant8k 并非完整的累积状态 DST，而是**带对话上下文的单轮纯原文片段抽取**——恰好架在单轮 SLU 与多轮 DST 之间。它源自 PolyAI 的真实商业预订对话，最大特色是每条用户话语都附带了**上一轮系统追问的槽位提示（`requestedSlots`）**。在真实生产环境里，用户经常只回一个孤零零的词——比如 *"7"* 或 *"Friday"*——究竟该填 `time` 还是 `people`，完全取决于机器人刚才问了什么。此外，它规整的 8 级减半切分，让研究者能精准刻画极低资源（64 条、128 条样本）下模型与 LLM 的边界提取曲线（如是否包含 `"at"`、`"for"` 等介词）。
+- **代表性 SOTA（严格口径，3,731 测试句上 5 槽位宏平均 Span F1）**：
+  - *全量监督（100% = 8,198 训练句）*：**Span-ConveRT** **96.0 F1**，高于 V-CNN-CRF 的 **94.0 F1** 与 Span-BERT 的 **92.0 F1**（[Coope et al., ACL 2020](#zh-ref-coope-2020)）；**ConVEx** 同样达到 **96.0 F1**（[Henderson & Vulić, NAACL 2021](#zh-ref-henderson-2021)）。
+  - *极低资源少样本（1/64 = 128 句 / 1/128 = 64 句）*：**ConVEx 集成版**在 1/64 与 1/128 上分别取得 **78.2 F1** 与 **73.5 F1**（单模型为 76.0 / 71.7 F1，[Henderson & Vulić, NAACL 2021](#zh-ref-henderson-2021)）；传统基线在极低资源下则大幅跌至约 37–58 F1（1/64）和 26–41 F1（1/128）。在歧义样本上，显式以 `requestedSlots` 为条件的问答式槽位标注方法（QASL）能在 1/64 达到 **87.9 F1**（无上下文仅 81.0）、在 1/128 达到 **85.8 F1**（无上下文仅 81.7），直接量化了上轮上下文对短回复消歧的决定性价值。
+- **优势与局限**：优势是源自真实生产对话、极低资源与 `requestedSlots` 消歧设计无比纯粹；局限是单垂直领域仅 5 类槽位、不追踪全对话累积信念状态且仅限英语。
+
+### 6.4 CrossWOZ 与 RiSAWOZ：中文多轮多域对话双璧
+
+中文任务型对话长期拥有两组互补性极强的核心多轮基准，分别直击**跨领域约束传播**与**宽领域覆盖 + 汉语零指代/省略**两大真实难题：
+
+- **CrossWOZ**（[Zhu et al., TACL 2020](#zh-ref-zhu-2020)，清华）：
+  - **规格速览**：简体中文 ｜ 6,012 段对话（5,012 / 500 / 500）、约 102,500 轮（场均约 16.9 轮）｜ 5 领域（酒店、餐馆、景点、地铁、出租车）｜ 72 槽位 ｜ 7,871 个唯一槽位值（已集成至 ConvLab-2/3）。
+  - **核心亮点与挑战**：首个大规模中文 WoZ 数据集，最独特的价值在于约 **60%** 的对话包含**显式跨领域目标依赖**——例如先选定一个景点，再根据该景点周边去筛餐馆、规划地铁或叫出租车。这对跨轮、跨领域约束传播以及中文 POI 实体精确匹配构成严峻考验。
+  - **代表性 SOTA（CrossWOZ 测试集 Joint State / Goal Accuracy）**：原始 **TRADE** 基线总体仅 **36.08%**（单子目标对话可达 **71.67%**，但遇到复杂跨领域多子目标 `CM+T` 对话时暴跌至 **25.65%**；借助真值对话行为的 RuleDST 为 71.33%，[Zhu et al., TACL 2020](#zh-ref-zhu-2020)）；更强的监督模型 **Mars-G** 将 JGA 推升至 **59.8%**。
+- **RiSAWOZ**（[Quan et al., EMNLP 2020](#zh-ref-quan-2020)）：
+  - **规格速览**：简体中文 ｜ 11,200 段对话（10,000 / 600 / 600）、超过 150,000 轮（场均约 13–14 轮；训练集 134,580 轮）｜ **12 领域**（景点、餐馆、酒店、机票、火车、天气、电影、电视、电脑、汽车、医院、课程）｜ 约 159 个槽位（单域约 65% / 多域约 35%）。
+  - **核心亮点与挑战**：中文领域覆盖最广的多轮 DST 语料，突破了传统“旅游出行”圈层，涵盖电脑配置、车型、课程、医疗等长尾本体；更可贵的是在对话状态与动作之外，提供了显式的**指代消解与省略补全标注**——直面汉语口语中高频出现的“零主语/零宾语”（如直接说“*价格便宜点的*”而不重复前文实体或领域）。
+  - **代表性 SOTA（RiSAWOZ 测试集 JGA，[Quan et al., EMNLP 2020](#zh-ref-quan-2020)）**：**TRADE** 总体 **58.19%**（单域 65.35% / 多域 50.49%）；论文提出的 **MLCSG** 达到 **66.16%**（单域 73.04% / 多域 58.77%）。
+- **两者的共同局限**：相比 MultiWOZ，二者都缺少类似 v2.4 的官方二次去噪测试版，且在国际开源社区中针对前沿大模型的标准化零样本 JGA 榜单仍较为稀缺（同时 CrossWOZ 偏北京旅游知识库，RiSAWOZ 单域比例相对偏高）——这对中文 LLM 对话评测其实意味着一片颇具价值的空白。
+
+---
+
+## 7. 更广阔的数据集版图与常见混淆避坑
+
+除了上述 10 组精选核心基准外，还有一批在特定维度（多语种角色对齐、单句多意图耦合、大规模口语嵌套、中文智能音箱、中英双语迁移、鲁棒性压力测试以及 DST 历史基石）上各具不可替代价值的数据集。下表一次性收束其核心规格与选型定位：
+
+| 数据集 | 年份 | 轮次 | 语种 | 领域与规模速览 | 核心定位与特色挑战 | 主要出处 |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **MultiATIS++** | 2020 | 单轮 | 9 语种（英/西/德/法/葡/中/日/印地/土） | 1 域（航班）；总计约 3.4 万+ 句（每语种约 1.4k–5.8k）；21–26 意图；约 99–140 槽位标签 | ATIS 人工翻译与槽位对齐版；检验跨语种词序剧变下的细粒度角色槽位投影 | [Xu et al. (EMNLP 2020)](#zh-ref-xu-2020) |
+| **MixSNIPS & MixATIS** | 2020 | 单轮 | 英语 | MixSNIPS 7 域 44,173 句（7 基础意图 / 39 槽位）；MixATIS 1 域 14,748 句（18 意图 / 约 84–120 槽位标签） | 将 1–3 个单意图查询拼接成多意图单轮；考验槽位与共现意图的解耦归属 | [Qin et al. (Findings EMNLP 2020)](#zh-ref-qin-2020) |
+| **HWU64** | 2019 | 单轮 | 英语 | 21 域（智能家居）；总标注 25,716 句（按切分约 1.1 万–2.57 万）；64 意图；54 槽位 | SLURP / MASSIVE 本体的商业前身；覆盖宽广但常被误当纯意图集使用 | [Liu et al. (IWSDS 2019)](#zh-ref-liu-2019-hwu) |
+| **STOP** | 2022 | 单轮（口语） | 英语 | 8 域（继承 TOPv2）；236,477 条录音（218 小时、885 位说话人，源自 12.5 万 TOPv2 树）；80 意图 / 82 槽位 | 规模最大的口语嵌套语义解析语料；端到端音频直出组合式语义树 | [Tomasello et al. (IEEE SLT 2022)](#zh-ref-tomasello-2022) |
+| **CAIS** | 2019 | 单轮 | 中文 | 智能音箱多域（音乐、家居、天气等）；10,001 句（7,995 / 994 / 1,012–1,024）；11 意图；75 BIOES 标签（约 24 槽位） | 真实中文智能音箱语料；聚焦字级分词歧义与口语化短指令 | [Liu et al. (EMNLP-IJCNLP 2019)](#zh-ref-liu-2019-cais) |
+| **SMP-ECDT (2017 / 2019)** | 2017 / 2019 | 单轮 | 中文 | SMP2017 Task 1：约 30 域、3,735 句（31 意图、**0 槽位**）；SMP2019-ECDT-NLU：多域、约 3,609 句（24 意图、**124 槽位**） | 中文工业级人机对话评测（CIPS-SMP / 哈工大 / 科大讯飞）；**极易用错年份版本** | [SMP2017 / SMP2019 组委会](#zh-ref-smp-ecdt) |
+| **DSTC2** | 2014 | 多轮（口语） | 英语 | 1 域（剑桥餐馆）；约 3,324 对话（1,117 测试）、约 2.5 万–2.7 万轮；3 可告知 + 8 可询问槽位 | 封闭本体 DST 开山之作；含真实 ASR N-best 列表与对话中途改主意 | [Henderson et al. (SIGDIAL 2014)](#zh-ref-henderson-2014) |
+| **WOZ 2.0** | 2017 | 多轮 | 英语 | 1 域（剑桥餐馆）；1,200 对话（600 / 200 / 400）、约 9,600 轮；沿用 DSTC2 的 3 个核心槽位 | 纯文本 WoZ DST 先驱；剥离了 ASR 噪声，但单域小本体早已饱和 | [Wen et al. (EACL 2017)](#zh-ref-wen-2017)；[Mrkšić et al. (ACL 2017)](#zh-ref-mrksic-2017) |
+| **BiToD** | 2021 | 多轮 | 中英双语 | 5 域（餐馆、酒店、景点、地铁、天气）；7,232 对话（3,689 英 + 3,543 中；5,787 / 542 / 902）、144,798 轮 | 基于共享知识库的 M2M 双语端到端 TOD 与 DST；专为中英跨语种/零样本迁移设计 | [Lin et al. (NeurIPS 2021)](#zh-ref-lin-2021-bitod) |
+| **RADDLE** | 2021 | 多轮 | 英语 | 多域 TOD 评测套件（餐馆、电影、出租车、咖啡等）+ 少样本适应 + 鲁棒性诊断清单 | 面向少样本适应与鲁棒性压力测试：复述、冗长/简略、拼写错、ASR 噪声、未见实体与域外话语 | [Peng et al. (ACL-IJCNLP 2021)](#zh-ref-peng-2021) |
+
+有两处极容易在论文复现中踩坑的细节值得单独点出：
+- **SMP-ECDT 的年份坑**：中文社区常笼统引用“SMP-ECDT”，但 **SMP2017 Task 1 仅有 31 类意图分类、完全不含槽位标注**；只有 **SMP2019-ECDT-NLU** 才包含 24 个意图与 124 种槽位的完整联合标注。
+- **HWU64 的用途坑**：许多意图分类论文只取了 HWU64 的 64 个意图标签，让不少新手误以为它没有槽位——实际上它的原始发布（NLU-Eval-Data）包含完整的 54 种槽位标注，且正是后来 SLURP 与 MASSIVE 本体的直接源头。
+
+> **常见混淆避坑：Banking77 与 CLINC150 并不是槽位填充基准**
+>
+> 在不少 NLU 与任务型对话综述里，**Banking77**（[Casanueva et al., NLP4ConvAI@ACL 2020](#zh-ref-casanueva-2020)：13,083 句英语网上银行查询，10,003 训练 / 3,080 测试，**77 个细粒度意图、0 个槽位标注**）与 **CLINC150**（[Larson et al., EMNLP-IJCNLP 2019](#zh-ref-larson-2019)：23,700 句英语、10 领域，**150 个域内意图 + 1 个域外 OOS 类别、0 个槽位标注**）常常与 SNIPS、ATIS、HWU64 并列出现。
+>
+> 请务必区分：**这两个数据集完全没有任何词元级或片段级槽位标注**。它们专门用于评测句子级意图分类与域外（Out-of-Scope, OOS）拒识，无法用来衡量槽位抽取、边界保真度或跨 schema 槽位迁移。
+
+---
+
+## 8. 前沿延伸：从经典槽位填充到 LLM 函数调用（Function Calling）
+
+站在今天回望，经典槽位填充（`意图 + BIO 片段`）与 schema 驱动的多轮 DST（`服务 + 槽位键值对状态`）并没有消亡，而是直接演变成了当代 LLM Agent 的核心基座能力——**函数调用（Function Calling / Tool Use）与结构化 JSON Schema 抽取**。
+
+这一演进并非隐喻，而是已有直接的实证桥梁。**FnCTOD**（[Li et al., ACL 2024](#zh-ref-li-2024-fnctod)）直接把 MultiWOZ 与 SGD 的对话 schema 重构为带类型的函数签名，结果仅凭这一格式对齐，就让 **GPT-4 在零样本多轮 DST 上的 JGA 大涨 +14%**（在多种模型与基准上平均提升 **+5.6%**）。沿着这条脉络，新一代评测基准正把“槽位填充”推向更贴近真实软件生态的战场：
+
+- **BFCL（Berkeley Function Calling Leaderboard，[Patil et al., ICML 2025](#zh-ref-patil-2025)，2024 年起发布）**：涵盖 **2,000+ 条测试用例**，跨越 Python / Java / JavaScript，覆盖单调用、多调用、并行调用、真实用户贡献 schema、**无关/不可调用拒答（irrelevance / abstention）**，以及**多轮有状态 Agent 轨迹**；评测方式不再依赖脆弱的字符串精确匹配，而是采用 **AST 抽象语法树比对 + 真实执行状态验证**。
+- **ToolBench（ToolLLM，[Qin et al., ICLR 2024](#zh-ref-qin-2024)）**：汇集来自 RapidAPI 的 **16,464 个真实世界 REST API**，横跨 **49 个类别**，系统评测单工具调用（I1）、同集合多工具（I2）、跨集合多步链式调用（I3）以及完全未见的域外 API 泛化。
+
+把经典槽位填充与现代 Function Calling 并排对照，能极其清晰地看清**什么已经彻底变了，而什么依然顽固地难**：
+
+- **真正改变的三个维度**：
+  1. **数据结构升级**：从扁平 BIO 标签或一层 `domain-slot` 字典，演进为**强类型、可嵌套的 JSON 参数**（布尔值、枚举、数组、多层嵌套对象）。
+  2. **决策空间剧增**：从单领域几十个固定意图分类头，演进为面对成百上千候选 API 的**动态工具检索、选择与并行编排**。
+  3. **从静态标注走向闭环执行**：不再是开环预测完就交卷，而是发起真实 API 调用、观察返回结果或报错信息，并在后续轮次里自我修复错误参数。
+- **依然顽固存在的三个老问题（经典槽位填充的当代回响）**：
+  1. **Schema 遵循与枚举/格式忠实度**：哪怕是最强的前沿大模型，依然会偏离严格的参数类型、枚举拼写、日期时间格式或必填/选填边界——这正是 SNIPS 规范边界错误与 MultiWOZ 槽位规范化失误的直系后代。
+  2. **参数幻觉与拒答失败**：当用户根本没提某个可选参数，或当前工具箱根本没有合适函数时，LLM 仍倾向于凭常识脑补看似合理的默认值或硬调一个无关函数（BFCL 的 `irrelevance` 与 `multi_turn_miss_param` 专项切分反复暴露出这一顽疾）——与 DST 里的槽位过触发如出一辙。
+  3. **长对话跨轮状态漂移**：在绵延多轮的复杂交互中，LLM 依然会遗忘五轮前立下的约束，或在用户更改需求时未能彻底清除陈旧参数。
+
+这也最终把整条技术脉络首尾相连：无论外在包装是 1990 年的 ATIS 航班槽位、2020 年的 SGD 动态服务帧，还是 2025 年的 BFCL 多轮 Agent 工具调用，**让模型在未见过的规范、噪声与长程上下文中既保持灵活泛化、又严格敬畏接口边界与拒答纪律**，始终是自然语言理解最核心、也最迷人的挑战。
+
+---
+
+## 9. 参考文献
+
+- <a id="zh-ref-bastianelli-2020"></a>**Bastianelli et al. (2020).** Emanuele Bastianelli, Andrea Vanzo, Paweł Świętojański, & Verena Rieser. SLURP: A Spoken Language Understanding Resource Package. *EMNLP 2020*.
+- <a id="zh-ref-budzianowski-2018"></a>**Budzianowski et al. (2018).** Paweł Budzianowski, Tsung-Hsien Wen, Bo-Hsiang Tseng, Iñigo Casanueva, Stefan Ultes, Osman Ramadan, & Milica Gašić. MultiWOZ — A Large-Scale Multi-Domain Wizard-of-Oz Dataset for Task-Oriented Dialogue Modelling. *EMNLP 2018*.
+- <a id="zh-ref-casanueva-2020"></a>**Casanueva et al. (2020).** Iñigo Casanueva, Tadas Temčinas, Daniela Gerz, Matthew Henderson, & Ivan Vulić. Efficient Intent Detection with Dual Sentence Encoders (Banking77). *NLP4ConvAI Workshop @ ACL 2020*.
+- <a id="zh-ref-chen-2019"></a>**Chen et al. (2019).** Qian Chen, Zhu Zhuo, & Wen Wang. BERT for Joint Intent Classification and Slot Filling (JointBERT). *arXiv:1902.10909*.
+- <a id="zh-ref-chen-2020"></a>**Chen et al. (2020).** Xilun Chen, Asish Ghoshal, Yashar Mehdad, Luke Zettlemoyer, & Sonal Gupta. Low-Resource Domain Adaptation for Compositional Task-Oriented Semantic Parsing (TOPv2). *EMNLP 2020*.
+- <a id="zh-ref-coope-2020"></a>**Coope et al. (2020).** Samuel Coope, Tyler Farghly, Daniela Gerz, Ivan Vulić, & Matthew Henderson. Span-ConveRT: Few-shot Span Extraction for Dialog with Pretrained Conversational Representations (RESTAURANTS-8K). *ACL 2020*.
+- <a id="zh-ref-coucke-2018"></a>**Coucke et al. (2018).** Alice Coucke, Alaa Saade, Adrien Ball, Théodore Bluche, Alexandre Caulier, David Leroy, Clément Doumouro, Thibault Gisselbrecht, Francesco Caltagirone, Thibaut Lavril, Maël Primet, & Joseph Dureau. [Snips Voice Platform: an embedded Spoken Language Understanding system for private-by-design voice interfaces](https://arxiv.org/abs/1805.10190). *arXiv:1805.10190*.
+- <a id="zh-ref-eric-2020"></a>**Eric et al. (2020).** Mihail Eric, Rahul Goel, Shachi Paul, Abhishek Sethi, Sanchit Agarwal, Shuyang Gao, Adarsh Kumar, Anuj Goyal, Peter Ku, & Dilek Hakkani-Tür. MultiWOZ 2.1: A Consolidated Multi-Domain Dialogue Dataset with State Corrections and State Tracking Baselines. *LREC 2020*.
+- <a id="zh-ref-feng-2023"></a>**Feng et al. (2023).** Yujie Feng, Zexin Lu, Bo Liu, Liming Zhan, & Xiao-Ming Wu. Towards LLM-driven Dialogue State Tracking (LDST). *EMNLP 2023*.
+- <a id="zh-ref-fitzgerald-2023"></a>**FitzGerald et al. (2023).** Jack FitzGerald, Christopher Hench, Charith Peris, Scott Mackie, Kay Rottmann, Ana Sanchez, Aaron Nash, Liam Urbach, Vishesh Kakarala, Richa Singh, Swetha Ranganath, Laurie Crist, Misha Britan, Wouter Leeuwis, Gokhan Tur, & Prem Natarajan. MASSIVE: A 1M-Example Multilingual Natural Language Understanding Dataset with 51 Typologically-Diverse Languages. *ACL 2023* (`arXiv:2204.08582`).
+- <a id="zh-ref-goo-2018"></a>**Goo et al. (2018).** Chih-Wen Goo, Guang Gao, Yun-Kai Hsu, Chih-Li Huo, Tsung-Chieh Chen, Keng-Wei Hsu, & Yun-Nung Chen. Slot-Gated Modeling for Joint Slot Filling and Intent Prediction. *NAACL-HLT 2018*.
+- <a id="zh-ref-han-2021"></a>**Han et al. (2021).** Ting Han, Ximing Liu, Ryuichi Takanobu, Yixin Lian, Chongxuan Huang, Dazhen Wan, Wei Peng, & Minlie Huang. MultiWOZ 2.3: A Multi-Domain Task-Oriented Dialogue Dataset Enhanced with Annotation Corrections and Co-Reference Annotation. *NLPCC 2021*.
+- <a id="zh-ref-heck-2023"></a>**Heck et al. (2023).** Michael Heck, Nurul Lubis, Benjamin Ruppik, Renato Vukovic, Shutong Feng, Christian Geishauser, Hsien-Chin Lin, Carel van Niekerk, & Milica Gašić. ChatGPT for Zero-shot Dialogue State Tracking: A Solution or an Opportunity? *SIGDIAL 2023*.
+- <a id="zh-ref-hemphill-1990"></a>**Hemphill et al. (1990).** Charles T. Hemphill, John J. Godfrey, & George R. Doddington. [The ATIS Spoken Language Systems Pilot Corpus](https://aclanthology.org/H90-1021/). *Speech and Natural Language Workshop 1990*.
+- <a id="zh-ref-henderson-2014"></a>**Henderson et al. (2014).** Matthew Henderson, Blaise Thomson, & Jason D. Williams. The Second Dialog State Tracking Challenge (DSTC2). *SIGDIAL 2014*.
+- <a id="zh-ref-henderson-2021"></a>**Henderson & Vulić (2021).** Matthew Henderson & Ivan Vulić. ConVEx: Data-Efficient and Few-Shot Slot Labeling. *NAACL-HLT 2021*.
+- <a id="zh-ref-hu-2022"></a>**Hu et al. (2022).** Yushi Hu, Chia-Hsuan Lee, Tianbao Xie, Tao Yu, Noah A. Smith, & Mari Ostendorf. In-Context Learning for Few-Shot Dialogue State Tracking (IC-DST). *EMNLP 2022*.
+- <a id="zh-ref-hudecek-2023"></a>**Hudeček & Dušek (2023).** Vojtěch Hudeček & Ondřej Dušek. Are Large Language Models All You Need for Task-Oriented Dialogue? *SIGDIAL 2023*.
+- <a id="zh-ref-larson-2019"></a>**Larson et al. (2019).** Stefan Larson, Anish Mahendran, Joseph J. Peper, Christopher Clarke, Andrew Lee, Parker Hill, Jonathan K. Kummerfeld, Kevin Leach, Michael A. Laurenzano, Lingjia Tang, & Jason Mars. An Evaluation Dataset for Intent Classification and Out-of-Scope Prediction (CLINC150). *EMNLP-IJCNLP 2019*.
+- <a id="zh-ref-li-2021"></a>**Li et al. (2021).** Haoran Li, Abhinav Arora, Shuohui Chen, Anchit Gupta, Sonal Gupta, & Yashar Mehdad. MTOP: A Comprehensive Multilingual Task-Oriented Semantic Parsing Benchmark. *EACL 2021*.
+- <a id="zh-ref-li-2023"></a>**Li et al. (2023).** Xuefeng Li, Liwen Wang, Guanting Dong, Keqing He, Jinzheng Zhao, Hao Lei, Jiachi Liu, & Weiran Xu. [Generative Zero-Shot Prompt Learning for Cross-Domain Slot Filling with Inverse Prompting](https://arxiv.org/abs/2307.02830). *Findings of ACL 2023*.
+- <a id="zh-ref-li-2024-fnctod"></a>**Li et al. (2024, FnCTOD).** Zekun Li, Zhiyu Zoey Chen, Mike Ross, Patrick Huber, Seungwhan Moon, Zhaojiang Lin, Xin Luna Dong, Adithya Sagar, Xifeng Yan, & Paul A. Crook. Large Language Models as Zero-Shot Dialogue State Tracker through Function Calling (FnCTOD). *ACL 2024*.
+- <a id="zh-ref-li-2025-synaug"></a>**Li et al. (2025, SynAug).** Weizhen Li, Junbao Huang, Peijie Huang, Yuhong Xu, & Jiekun Fan. [Synergistic Augmentation: Enhancing Cross-Domain Zero-Shot Slot Filling with Small Model-Assisted Large Language Models](https://aclanthology.org/2025.findings-acl.1097/). *Findings of ACL 2025*.
+- <a id="zh-ref-lin-2021-bitod"></a>**Lin et al. (2021, BiToD).** Zhaojiang Lin, Andrea Madotto, Genta Indra Winata, Peng Xu, Feijun Jiang, Yuxiang Hu, Chen Shi, & Pascale Fung. BiToD: A Bilingual Multi-Domain Dataset For Task-Oriented Dialogue Modeling. *NeurIPS 2021 Datasets and Benchmarks Track*.
+- <a id="zh-ref-liu-2013-rest"></a>**Liu et al. (2013a).** Jingjing Liu, Panupong Pasupat, Scott Cyphers, & Jim Glass. ASGARD: A Portable Architecture for Multilingual Dialogue Systems (MIT Restaurant). *IEEE ICASSP 2013*.
+- <a id="zh-ref-liu-2013-movie"></a>**Liu et al. (2013b).** Jingjing Liu, Panupong Pasupat, Yining Wang, Scott Cyphers, & Jim Glass. Query Understanding Enhanced by Hierarchical Parsing Structures (MIT Movie). *IEEE ASRU 2013*.
+- <a id="zh-ref-liu-2019-cais"></a>**Liu et al. (2019a, CAIS).** Yijin Liu, Fandong Meng, Jinchao Zhang, Jie Zhou, Yufeng Chen, & Jinan Xu. CM-Net: A Novel Collaborative Memory Network for Spoken Language Understanding (CAIS). *EMNLP-IJCNLP 2019*.
+- <a id="zh-ref-liu-2019-hwu"></a>**Liu et al. (2019b, HWU64).** Xingkun Liu, Arash Eshghi, Paweł Świętojański, & Verena Rieser. Benchmarking Natural Language Understanding Services for Building Conversational Agents (HWU64 / NLU-Eval-Data). *IWSDS 2019*.
+- <a id="zh-ref-liu-2020"></a>**Liu et al. (2020).** Zihan Liu, Genta Indra Winata, Peng Xu, & Pascale Fung. [Coach: A Coarse-to-Fine Approach for Cross-domain Slot Filling](https://aclanthology.org/2020.acl-main.3/). *ACL 2020*, pp. 19–25.
+- <a id="zh-ref-mrksic-2017"></a>**Mrkšić et al. (2017).** Nikola Mrkšić, Diarmuid Ó Séaghdha, Tsung-Hsien Wen, Blaise Thomson, & Steve Young. Neural Belief Tracker: Data-Driven Dialogue State Tracking. *ACL 2017*.
+- <a id="zh-ref-pan-2023"></a>**Pan et al. (2023).** Wenbo Pan, Qiguang Chen, Xiao Xu, Wanxiang Che, & Libo Qin. [A Preliminary Evaluation of ChatGPT for Zero-shot Dialogue Understanding](https://arxiv.org/abs/2304.04256). *arXiv:2304.04256*.
+- <a id="zh-ref-patil-2025"></a>**Patil et al. (2025).** Shishir G. Patil, Huanzhi Mao, Charlie Cheng-Jie Ji, Fanjia Yan, Vishnu Suresh, Ion Stoica, & Joseph E. Gonzalez. The Berkeley Function Calling Leaderboard (BFCL): From Tool Use to Agentic Evaluation of Large Language Models. *ICML 2025*.
+- <a id="zh-ref-peng-2021"></a>**Peng et al. (2021).** Baolin Peng, Chunyuan Li, Zhu Zhang, Chenguang Zhu, Jinchao Li, & Jianfeng Gao. RADDLE: An Evaluation Benchmark and Analysis Platform for Robust Task-oriented Dialog Systems. *ACL-IJCNLP 2021*.
+- <a id="zh-ref-peng-2022"></a>**Peng et al. (2022).** Yifan Peng, Siddharth Dalmia, Ian Lane, & Shinji Watanabe. Branchformer: Parallel MLP-Attention Architectures to Capture Local and Global Context for Speech Recognition and Understanding. *ICML 2022*.
+- <a id="zh-ref-qin-2019"></a>**Qin et al. (2019).** Libo Qin, Wanxiang Che, Yangming Li, Haoyang Wen, & Ting Liu. A Stack-Propagation Framework with Token-Level Intent Detection for Spoken Language Understanding. *EMNLP-IJCNLP 2019*.
+- <a id="zh-ref-qin-2020"></a>**Qin et al. (2020).** Libo Qin, Xiao Xu, Wanxiang Che, & Ting Liu. AGIF: An Adaptive Graph-Interactive Framework for Joint Multiple Intent Detection and Slot Filling (MixSNIPS & MixATIS). *Findings of EMNLP 2020*.
+- <a id="zh-ref-qin-2024"></a>**Qin et al. (2024).** Yujia Qin, Shihao Liang, Yining Ye, Kunlun Zhu, Lan Yan, Yaxi Lu, Yankai Lin, Xin Cong, Xiangru Tang, Bill Qian, Sihan Zhao, Lauren Hong, Runchu Tian, Ruobing Xie, Jie Zhou, Mark Gerstein, Dahai Li, Zhiyuan Liu, & Maosong Sun. ToolLLM: Facilitating Large Language Models to Master 16000+ Real-world APIs (ToolBench). *ICLR 2024*.
+- <a id="zh-ref-quan-2020"></a>**Quan et al. (2020).** Jun Quan, Shian Zhang, Qian Cao, Zizhong Li, & Deyi Xiong. RiSAWOZ: A Large-Scale Multi-Domain Wizard-of-Oz Dataset with Rich Semantic Annotations for Task-Oriented Dialogue Modeling. *EMNLP 2020*.
+- <a id="zh-ref-rastogi-2020"></a>**Rastogi et al. (2020).** Abhinav Rastogi, Xiaoxue Zang, Srinivas Sunkara, Raghav Gupta, & Pranav Khaitan. [Towards Scalable Multi-Domain Conversational Agents: The Schema-Guided Dialogue Dataset](https://arxiv.org/abs/1909.05855). *AAAI 2020*.
+- <a id="zh-ref-sainz-2024"></a>**Sainz et al. (2024).** Oscar Sainz, Iker García-Ferrero, Rodrigo Agerri, Oier Lopez de Lacalle, German Rigau, & Eneko Agirre. [GoLLIE: Annotation Guidelines improve Zero-Shot Information-Extraction](https://arxiv.org/abs/2310.03668). *ICLR 2024*.
+- <a id="zh-ref-smp-ecdt"></a>**SMP-ECDT 评测组委会 (2017 / 2019).** 全国社会媒体处理大会中文人机对话技术评测（SMP2017 Task 1 / SMP2019-ECDT-NLU）. *CIPS-SMP / 哈尔滨工业大学 / 科大讯飞*.
+- <a id="zh-ref-tomasello-2022"></a>**Tomasello et al. (2022).** Paden Tomasello, Akshat Shrivastava, Daniel Lazar, Po-Chun Hsu, Duc Le, Adithya Sagar, Ali Elkahky, Jade Copet, Wei-Ning Hsu, Yossi Adi, Robin Algayres, Tu Anh Nguyen, Emmanuel Dupoux, Luke Zettlemoyer, & Abdelrahman Mohamed. STOP: A Dataset for Spoken Task Oriented Semantic Parsing. *IEEE SLT 2022*.
+- <a id="zh-ref-tur-2010"></a>**Tur et al. (2010).** Gokhan Tur, Dilek Hakkani-Tür, & Larry Heck. What Is Left to Be Understood in ATIS? *IEEE SLT 2010*.
+- <a id="zh-ref-wen-2017"></a>**Wen et al. (2017).** Tsung-Hsien Wen, David Vandyke, Nikola Mrkšić, Milica Gašić, Lina M. Rojas-Barahona, Pei-Hao Su, Stefan Ultes, & Steve Young. A Network-based End-to-End Trainable Task-oriented Dialogue System (WOZ 2.0). *EACL 2017*.
+- <a id="zh-ref-xu-2020"></a>**Xu et al. (2020).** Weijia Xu, Batool Haider, & Saab Mansour. End-to-End Slot Alignment and Recognition for Cross-Lingual NLU (MultiATIS++). *EMNLP 2020*.
+- <a id="zh-ref-ye-2022"></a>**Ye et al. (2022).** Fanghua Ye, Jarana Manotumruksa, & Emine Yilmaz. MultiWOZ 2.4: A Multi-Domain Task-Oriented Dialogue Dataset with Essential Annotation Corrections to Improve State Tracking Evaluation. *SIGDIAL 2022*.
+- <a id="zh-ref-zang-2020"></a>**Zang et al. (2020).** Xiaoxue Zang, Abhinav Rastogi, Srinivas Sunkara, Raghav Gupta, Jianguo Zhang, & Jindong Chen. MultiWOZ 2.2: A Dialogue Dataset with Additional Annotation Corrections and State Tracking Baselines. *NLP4ConvAI Workshop @ ACL 2020*.
+- <a id="zh-ref-zaratiana-2024"></a>**Zaratiana et al. (2024).** Urchade Zaratiana, Nadi Tomeh, Pierre Holat, & Thierry Charnois. GLiNER: Generalist Model for Named Entity Recognition using Bidirectional Transformer. *NAACL 2024*.
+- <a id="zh-ref-zhao-2022"></a>**Zhao et al. (2022).** Jeffrey Zhao, Raghav Gupta, Yuan Cao, Dian Yu, Mingqiu Wang, Harrison Lee, Abhinav Rastogi, Izhak Shafran, & Yonghui Wu. [Description-Driven Task-Oriented Dialog Modeling](https://arxiv.org/abs/2201.08904). *arXiv:2201.08904*.
+- <a id="zh-ref-zhou-2024"></a>**Zhou et al. (2024).** Wenxuan Zhou, Sheng Zhang, Yu Gu, Muhao Chen, & Hoifung Poon. UniversalNER: Targeted Distillation from Large Language Models for Open Named Entity Recognition. *ICLR 2024*.
+- <a id="zh-ref-zhu-2020"></a>**Zhu et al. (2020).** Qi Zhu, Kaili Huang, Zheng Zhang, Xiaoyan Zhu, & Minlie Huang. CrossWOZ: A Large-Scale Chinese Cross-Domain Task-Oriented Dialogue Dataset. *TACL 2020*.
+- <a id="zh-ref-zhu-2024"></a>**Zhu et al. (2024).** Zhihong Zhu, Xuxin Cheng, Hao An, Zhichang Wang, Dongsheng Chen, & Zhiqi Huang. [Zero-Shot Spoken Language Understanding via Large Language Models: A Preliminary Study](https://aclanthology.org/2024.lrec-main.1554/). *LREC-COLING 2024*.

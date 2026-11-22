@@ -1,0 +1,1664 @@
+---
+export interface Props {
+  lang?: 'en' | 'zh';
+  defaultScope?: 'all' | 'deep-dive' | 'landscape';
+  defaultTurn?: 'all' | 'single' | 'multi';
+}
+
+interface LocalizedText {
+  en: string;
+  zh: string;
+}
+
+type TurnType = 'single' | 'multi';
+type ScopeType = 'deep-dive' | 'landscape';
+type LangGroup = 'en' | 'multilingual' | 'zh';
+type FeatureTag =
+  | 'zero-shot'
+  | 'nested'
+  | 'spoken-asr'
+  | 'dst'
+  | 'low-resource'
+  | 'multi-intent'
+  | 'robustness';
+
+interface BenchmarkEntry {
+  id: string;
+  name: string;
+  year: string;
+  citation: string;
+  turn: TurnType;
+  scope: ScopeType;
+  langGroup: LangGroup;
+  languages: LocalizedText;
+  domains: LocalizedText;
+  scale: LocalizedText;
+  schemaType: LocalizedText;
+  tags: FeatureTag[];
+  challenge: LocalizedText;
+  sotaFull?: LocalizedText;
+  sotaZeroShot?: LocalizedText;
+  pros?: LocalizedText;
+  cons?: LocalizedText;
+}
+
+const {
+  lang = 'en',
+  defaultScope = 'all',
+  defaultTurn = 'all',
+} = Astro.props;
+
+const isZh = lang === 'zh';
+const idPrefix = isZh ? 'zh-' : '';
+const t = (text: LocalizedText) => (isZh ? text.zh : text.en);
+
+const tagLabels: Record<FeatureTag, LocalizedText> = {
+  'zero-shot': { en: 'Zero-shot', zh: '零样本' },
+  nested: { en: 'Nested', zh: '嵌套结构' },
+  'spoken-asr': { en: 'Spoken / ASR', zh: '语音 / ASR' },
+  dst: { en: 'DST', zh: '状态追踪' },
+  'low-resource': { en: 'Low-resource', zh: '低资源' },
+  'multi-intent': { en: 'Multi-intent', zh: '多意图' },
+  robustness: { en: 'Robustness', zh: '鲁棒性' },
+};
+
+const tagOrder: FeatureTag[] = [
+  'zero-shot',
+  'nested',
+  'spoken-asr',
+  'dst',
+  'low-resource',
+  'multi-intent',
+  'robustness',
+];
+
+const benchmarks: BenchmarkEntry[] = [
+  // === CURATED DEEP-DIVE: SINGLE-TURN ===
+  {
+    id: 'snips',
+    name: 'SNIPS',
+    year: '2018',
+    citation: 'Coucke et al., 2018',
+    turn: 'single',
+    scope: 'deep-dive',
+    langGroup: 'en',
+    languages: { en: 'EN', zh: '英文' },
+    domains: { en: '7 voice domains', zh: '7 个语音域' },
+    scale: {
+      en: '14,484 utts (13,084 / 700 / 700) · 7 intents · 39 slots (72 BIO tags)',
+      zh: '14,484 条话语（13,084 / 700 / 700）· 7 个意图 · 39 类槽位（72 个 BIO 标签）',
+    },
+    schemaType: { en: 'Flat BIO spans', zh: '扁平 BIO 片段' },
+    tags: ['zero-shot'],
+    challenge: {
+      en: 'Convention gap on pronouns/deictics (e.g., "my" → playlist_owner)',
+      zh: '代词与指示词标注规范分歧（如 "my" → playlist_owner）',
+    },
+    sotaFull: {
+      en: 'Saturated (~97–98% F1): JointBERT 97.08% Slot F1 (Chen et al., 2019); Stack-Propagation 94.20% (Qin et al., EMNLP 2019).',
+      zh: '全量已饱和（~97–98% F1）：JointBERT 97.08% Slot F1（Chen et al., 2019）；Stack-Propagation 94.20%（Qin et al., EMNLP 2019）。',
+    },
+    sotaZeroShot: {
+      en: 'LODO 7-domain zero-shot: Coach+TR 34.09% unseen / 51.93% seen (ACL 2020); SynAug 68.54% avg F1 (ACL 2025); Qwen3-8B+Advisor 79.69% vs Advisor 69.24% (this blog). In-domain ChatGPT: ~55.7–58.2% single-stage; GPT-SLU 90.03% multi-stage QA (LREC-COLING 2024).',
+      zh: '留一域（LODO）零样本：Coach+TR 未见槽位 34.09% / 已见 51.93%（ACL 2020）；SynAug 均值 68.54% F1（ACL 2025）；本博客 Qwen3-8B+顾问 79.69%（单顾问 69.24%）。域内零样本 ChatGPT 单阶段约 55.7–58.2%，多阶段 QA（GPT-SLU, 2024）达 90.03%。',
+    },
+    pros: {
+      en: 'Clean 7-domain leave-one-domain-out (LODO) protocol; balanced splits; ubiquitous baseline comparability.',
+      zh: '7 领域留一域（LODO）跨领域评测清晰规范，划分均衡，对比基线最齐全。',
+    },
+    cons: {
+      en: 'Small vocabulary, crowdsourced templates, saturated in full-shot; terse slot names hide implicit span conventions.',
+      zh: '词表较小、模板化较明显、全量评测已饱和；简短槽位名背后隐含未写明的边界规范。',
+    },
+  },
+  {
+    id: 'atis',
+    name: 'ATIS',
+    year: '1990',
+    citation: 'Hemphill et al., 1990; Goo et al., 2018',
+    turn: 'single',
+    scope: 'deep-dive',
+    langGroup: 'en',
+    languages: { en: 'EN', zh: '英文' },
+    domains: { en: '1 (Air Travel)', zh: '1（航空出行）' },
+    scale: {
+      en: '5,871 utts (4,478 / 500 / 893) · 21 intents · 79 slots (120 BIO tags)',
+      zh: '5,871 条话语（4,478 / 500 / 893）· 21 个意图 · 79 类槽位（120 个 BIO 标签）',
+    },
+    schemaType: { en: 'Role-qualified dot BIO', zh: '角色限定点分 BIO' },
+    tags: ['zero-shot'],
+    challenge: {
+      en: 'Flat-trained models collapse role slots (fromloc.city_name → city_name)',
+      zh: '扁平训练模型易将角色槽位坍缩到通用槽位（如 fromloc.city_name → city_name）',
+    },
+    sotaFull: {
+      en: 'Saturated (~95.7–96.5%+ F1): JointBERT 95.75% (Chen et al., 2019); Stack-Propagation 95.90% Slot F1 (Qin et al., EMNLP 2019).',
+      zh: '全量已饱和（~95.7–96.5%+ F1）：JointBERT 95.75%（Chen et al., 2019）；Stack-Propagation 95.90% Slot F1（Qin et al., EMNLP 2019）。',
+    },
+    sotaZeroShot: {
+      en: 'In-domain ChatGPT single-stage: 15.71%–58.24% F1 (Pan et al., 2023; Zhu et al., 2024); GPT-SLU multi-stage QA: 97.71% (GPT-3.5) / 98.00% (text-davinci-003). SNIPS→ATIS zero-shot (100% unseen): Qwen3-8B+Advisor 66.91% (raw advisor 77.60%), lifted to 78.46% via span-binding gate (this blog).',
+      zh: '域内单阶段 ChatGPT 仅 15.71%–58.24% F1（2023–2024），GPT-SLU 多阶段 QA 提至 97.71%–98.00%。SNIPS→ATIS 跨数据集零样本（100% 未见槽位）：本博客 Qwen3-8B+顾问 66.91%（单顾问 77.60%），加同族槽位门控后升至 78.46%。',
+    },
+    pros: {
+      en: 'Authentic 1990s spoken air-travel queries; rigorously tests fine-grained semantic role disambiguation (fromloc vs toloc vs stoploc).',
+      zh: '真实口语化航旅查询；能严格检验细粒度语义角色消歧（如出发地/目的地/经停地）。',
+    },
+    cons: {
+      en: 'Single legacy domain; heavy class imbalance (atis_flight dominates); minor slot/tag count variants across repos (79–83 slots).',
+      zh: '单一历史领域，意图分布高度偏斜（atis_flight 占主导）；不同开源版本的槽位数略有差异（79–83 类）。',
+    },
+  },
+  {
+    id: 'massive',
+    name: 'MASSIVE',
+    year: '2023',
+    citation: 'FitzGerald et al., ACL 2023',
+    turn: 'single',
+    scope: 'deep-dive',
+    langGroup: 'multilingual',
+    languages: { en: '51 langs (v1.0)', zh: '51 种语言 (v1.0)' },
+    domains: { en: '18 scenarios', zh: '18 个场景' },
+    scale: {
+      en: '~1M+ parallel utts (19,521/lang; 52 langs in v1.1) · 60 intents · 55 slots',
+      zh: '~100 万+ 平行话语（每语种 19,521 条；v1.1 含 52 语种）· 60 意图 · 55 槽位',
+    },
+    schemaType: { en: 'Flat localized spans', zh: '扁平本土化片段' },
+    tags: ['zero-shot'],
+    challenge: {
+      en: '>33-pt EN→non-EN zero-shot cliff & non-Latin tokenization mismatch',
+      zh: '英文零样本跨语迁移暴跌 >33 分，非拉丁文字分词与形态边界错位',
+    },
+    sotaFull: {
+      en: 'All-51-lang locale-avg Slot F1 (ACL 2023): XLM-R Base 83.6 ± 0.2%; mT5 Base 82.2 ± 0.2% (enc) / 81.3 ± 0.2% (seq2seq).',
+      zh: '51 语种全量联合训练均值 Slot F1（ACL 2023）：XLM-R Base 83.6 ± 0.2%；mT5 Base 82.2 ± 0.2%（编码器）/ 81.3 ± 0.2%（文本生成）。',
+    },
+    sotaZeroShot: {
+      en: 'EN-only zero-shot transfer across non-EN locales (ACL 2023): XLM-R Base drops to 50.3 ± 0.1% Slot F1; mT5 Base 44.8% (enc) / 41.6% (seq2seq). Full 51-lang LLM Slot F1 runs remain sparse; low-resource scripts still lag fine-tuned encoders.',
+      zh: '仅英文训练零样本跨语迁移（ACL 2023）：XLM-R Base 跌至 50.3 ± 0.1% Slot F1；mT5 Base 仅 44.8% / 41.6%。全 51 语种零样本 LLM 槽位基准仍稀缺，低资源文字显著落后微调编码器。',
+    },
+    pros: {
+      en: 'Unmatched 51-language parallel breadth with human cultural localization (native names/places) aligned to SLURP’s 18-domain ontology.',
+      zh: '51 语种平行规模无可替代，且经人工本土化改写（而非生硬机翻），与 SLURP 18 域本体直接对齐。',
+    },
+    cons: {
+      en: 'Text-only (no non-English audio); single-turn flat spans; task distribution still mirrors Western voice assistants.',
+      zh: '仅含文本（无非英语语音）；单轮扁平片段；任务分布仍偏重英语语音助手场景。',
+    },
+  },
+  {
+    id: 'slurp',
+    name: 'SLURP',
+    year: '2020',
+    citation: 'Bastianelli et al., EMNLP 2020',
+    turn: 'single',
+    scope: 'deep-dive',
+    langGroup: 'en',
+    languages: { en: 'EN (Audio + Text)', zh: '英文（语音 + 文本）' },
+    domains: { en: '18 scenarios', zh: '18 个场景' },
+    scale: {
+      en: '72,277 audio clips (~58 hrs) · 16,520 unique utts · 69 intents · 55 slots',
+      zh: '72,277 条真实音频（~58 小时）· 16,520 条去重文本 · 69 意图 · 55 槽位',
+    },
+    schemaType: { en: 'Flat realistic spans (SLU-F1)', zh: '扁平真实实体（SLU-F1）' },
+    tags: ['spoken-asr', 'zero-shot'],
+    challenge: {
+      en: '~14-pt ASR error propagation gap & OOV proper-noun corruption',
+      zh: 'ASR 转写错误导致约 14 分性能落差，OOV 专有名词易失真',
+    },
+    sotaFull: {
+      en: 'Gold-transcript NLU oracle ~84.3–84.8% SLU-F1 vs cascaded ASR+NLU ~70.2–70.8% (EMNLP 2020). E2E Spoken SLU: Conformer 71.40%, Branchformer 77.7% (ICML 2022), HuBERT-large 78.96% SLU-F1.',
+      zh: '金标文本 NLU 上限约 84.3–84.8% SLU-F1，级联 ASR+NLU 仅 ~70.2–70.8%（EMNLP 2020）。端到端语音 SLU：Conformer 71.40%、Branchformer 77.7%（ICML 2022）、HuBERT-large 78.96%。',
+    },
+    sotaZeroShot: {
+      en: 'Zero-shot spoken SLU (5 held-out slot types): ZS-Whisper-SLU 46.8% SLU-F1 (Interspeech 2024); WHISMA (Whisper+Llama-3, IEEE SLT 2024) 59.4% base → 73.7%–78.0% SLU-F1 with SCoT / multi-round prompting.',
+      zh: '零样本语音 SLU（留出 5 类未见槽位）：ZS-Whisper-SLU 46.8% SLU-F1（Interspeech 2024）；WHISMA（Whisper+Llama-3, SLT 2024）基础 59.4%，结合结构化思维链/多轮提示达 73.7%–78.0%。',
+    },
+    pros: {
+      en: 'Bridges text NLU and real multi-accent acoustic SLU; far higher lexical diversity than SNIPS/ATIS; diagnostic SLU-F1 isolates ASR vs semantic errors.',
+      zh: '联通文本 NLU 与真实多口音语音 SLU，词汇多样性远超 SNIPS/ATIS；SLU-F1 指标可区分声学误识别与语义错标。',
+    },
+    cons: {
+      en: 'English-only; single-turn; OOV proper nouns (names/media titles) harshly penalize exact string-match F1.',
+      zh: '仅英文且为单轮；人名/影音名等 OOV 专有名词在严格字符串匹配下失分严重。',
+    },
+  },
+  {
+    id: 'topv2',
+    name: 'TOPv2',
+    year: '2020',
+    citation: 'Chen et al., EMNLP 2020',
+    turn: 'single',
+    scope: 'deep-dive',
+    langGroup: 'en',
+    languages: { en: 'EN', zh: '英文' },
+    domains: { en: '8 domains', zh: '8 个领域' },
+    scale: {
+      en: '~180,000 utts · 80 intents · 82 slots · 25-SPIS low-resource splits',
+      zh: '~180,000 条话语 · 80 意图 · 82 槽位 · 含 25-SPIS 低资源划分',
+    },
+    schemaType: { en: 'Nested compositional trees', zh: '层级嵌套组合语义树' },
+    tags: ['nested', 'low-resource'],
+    challenge: {
+      en: 'Recursive slot-in-intent nesting & bracket drift under few-shot adaptation',
+      zh: '递归槽位嵌套与括号结构漂移，低资源迁移下嵌套域明显落后',
+    },
+    sotaFull: {
+      en: 'Saturation band ~87.0%–87.52% Tree Exact Match (EM) across 8 domains (Seq2Seq BART / Span-Pointer / retrieval-augmented parsers).',
+      zh: '全量 8 域饱和区间约 87.0%–87.52% 树精确匹配（Tree EM，BART / Span-Pointer / 检索增强解析器）。',
+    },
+    sotaZeroShot: {
+      en: 'Low-resource 25 SPIS adaptation (EMNLP 2020): BART-CopyPtr+FT 68.0% EM (Reminder) / 75.9% EM (Weather); BART+Reptile 70.5% (Reminder) / 77.7% (Weather) — nested Reminder trails flatter Weather by >7 pts.',
+      zh: '25-SPIS 低资源领域迁移（EMNLP 2020）：BART-CopyPtr+FT 在 Reminder 仅 68.0% EM（Weather 75.9%）；BART+Reptile 达 70.5% / 77.7%，深层嵌套的 Reminder 落后扁平域超 7 分。',
+    },
+    pros: {
+      en: 'Breaks the flat-BIO ceiling with true recursive slots; 25-SPIS protocol cleanly benchmarks few-shot domain transfer.',
+      zh: '打破扁平 BIO 上限，支持真实递归槽位嵌套；25-SPIS 协议为少样本领域迁移提供了严谨标尺。',
+    },
+    cons: {
+      en: 'English-only; strict Tree EM penalizes minor boundary/bracket errors harshly; requires seq2seq or structured decoding.',
+      zh: '仅限英文；严格 Tree EM 对细微边界或括号失误惩罚极重；无法用简单序列标注求解。',
+    },
+  },
+  {
+    id: 'mtop',
+    name: 'MTOP',
+    year: '2021',
+    citation: 'Li et al., EACL 2021',
+    turn: 'single',
+    scope: 'deep-dive',
+    langGroup: 'multilingual',
+    languages: { en: '6 langs', zh: '6 种语言' },
+    domains: { en: '11 domains', zh: '11 个领域' },
+    scale: {
+      en: '~100,000 utts (EN, ES, FR, DE, HI, TH) · 117 intents · 78 slots',
+      zh: '~100,000 条话语（英/西/法/德/印/泰）· 117 意图 · 78 槽位',
+    },
+    schemaType: { en: 'Multilingual nested trees', zh: '多语层级嵌套语义树' },
+    tags: ['nested', 'zero-shot'],
+    challenge: {
+      en: 'Zero-shot cross-lingual nested tree collapse on non-Latin scripts (HI, TH)',
+      zh: '跨语零样本嵌套树解析在印地语/泰语等非拉丁文字上显著崩塌',
+    },
+    sotaFull: {
+      en: 'English full-shot ~85.0%–86.4% Tree Exact Match (XLM-R / BART / mT5).',
+      zh: '英文全量训练约 85.0%–86.4% Tree EM（XLM-R / BART / mT5）。',
+    },
+    sotaZeroShot: {
+      en: 'EN→5 non-EN zero-shot (EACL 2021): XLM-R averages ~67.2% EM on flat cross-lingual transfer; decoupled compositional zero-shot transfer drops to ~35%–65% of EN accuracy on Hindi/Thai without MT+projection.',
+      zh: '英文→5 种非英语零样本迁移（EACL 2021）：XLM-R 扁平跨语平均 ~67.2% EM，而解耦组合式零样本在印地语/泰语上跌至英文准确率的约 35%–65%（无翻译投影时）。',
+    },
+    pros: {
+      en: 'Unifies recursive compositional semantic parsing with 6 typologically diverse languages.',
+      zh: '将递归组合语义解析与 6 种语言类型差异显著的语种合二为一。',
+    },
+    cons: {
+      en: 'Strict Tree EM makes zero-shot LLM structural alignment brittle across scripts and word orders.',
+      zh: '严格树匹配对跨语序、跨文字的零样本 LLM 结构对齐极为苛刻。',
+    },
+  },
+  {
+    id: 'mit-restaurant-movie',
+    name: 'MIT Restaurant & Movie',
+    year: '2013',
+    citation: 'Liu et al., ICASSP / ASRU 2013',
+    turn: 'single',
+    scope: 'deep-dive',
+    langGroup: 'en',
+    languages: { en: 'EN', zh: '英文' },
+    domains: { en: '2 verticals', zh: '2 个垂直域' },
+    scale: {
+      en: 'Rest: 7,660/1,521 (8 slots); Movie eng: 9,775/2,443 (12); trivia10k13: 7,816/1,953 (12)',
+      zh: '餐厅 7,660/1,521（8 槽位）；电影 eng 9,775/2,443（12）；trivia10k13 7,816/1,953（12）',
+    },
+    schemaType: { en: 'Flat BIO (slots only)', zh: '扁平 BIO（无意图）' },
+    tags: ['low-resource', 'zero-shot'],
+    challenge: {
+      en: 'Zero-shot LLMs collapse on subjective non-NE spans (Plot, Amenity, Hours)',
+      zh: '零样本 LLM 在主观非命名实体槽位（Plot/Amenity/Hours）上急剧下滑',
+    },
+    sotaFull: {
+      en: 'Saturated (~90%–95%+ entity F1) for fine-tuned BERT / RoBERTa-large (trivia10k13 harder due to long Plot / Quote / Opinion spans).',
+      zh: '全量微调 BERT / RoBERTa-large 达 ~90%–95%+ 实体 F1（trivia10k13 因 Plot/Quote/Opinion 等长片段更难）。',
+    },
+    sotaZeroShot: {
+      en: 'Strict zero-shot entity F1 (NAACL 2024 GLiNER / ICLR 2024 UniNER): ChatGPT 5.3% (Movie) / 32.8% (Restaurant); UniNER-7B 42.4% / 31.7%; GLiNER-L 57.2% / 42.9%. GoLLIE (ICLR 2024) confirms explicit guidelines are vital.',
+      zh: '严格零样本实体 F1（NAACL 2024 / ICLR 2024）：ChatGPT 仅 5.3%（电影）/ 32.8%（餐厅）；UniNER-7B 42.4% / 31.7%；GLiNER-L 57.2% / 42.9%。GoLLIE（ICLR 2024）证明需显式标注指南。',
+    },
+    pros: {
+      en: 'Lightweight vertical-domain stress test exposing severe zero-shot boundary failures on non-named-entity slots.',
+      zh: '轻量级垂直领域压测基准，尖锐暴露非命名实体槽位上的零样本边界难题。',
+    },
+    cons: {
+      en: 'No intent labels; lowercase unpunctuated search-style queries; subjective boundaries on descriptive clauses.',
+      zh: '无意图标注；全小写无标点搜索式语句；描述性短语的边界主观性较强。',
+    },
+  },
+
+  // === CURATED DEEP-DIVE: MULTI-TURN ===
+  {
+    id: 'sgd',
+    name: 'SGD',
+    year: '2020',
+    citation: 'Rastogi et al., AAAI 2020',
+    turn: 'multi',
+    scope: 'deep-dive',
+    langGroup: 'en',
+    languages: { en: 'EN', zh: '英文' },
+    domains: { en: '20 (45 APIs)', zh: '20 域（45 API）' },
+    scale: {
+      en: '22,825 dialogues · 463,284 turns (~20.3/dlg) · 214 train slots (~69.6% test unseen APIs)',
+      zh: '22,825 段对话 · 463,284 轮（均值 20.3 轮）· 214 训练槽位（测试集 ~69.6% 含未见 API）',
+    },
+    schemaType: { en: 'NL schema (Cat + Span frames)', zh: '自然语言 Schema（枚举 + 片段）' },
+    tags: ['zero-shot', 'dst'],
+    challenge: {
+      en: 'Disambiguating overlapping APIs & adhering to NL descriptions over ~20 turns',
+      zh: '区分同域重叠 API、忠实遵循自然语言 Schema 描述并跨约 20 轮保持状态',
+    },
+    sotaFull: {
+      en: 'Schema-driven DST (test ~70% unseen services): SGD-baseline 25.4% JGA (AAAI 2020); D3ST-XXL (T5-11B, Zhao et al., 2022) 86.4% overall JGA (95.8% seen / 83.3% unseen).',
+      zh: 'Schema 驱动 DST（测试集 ~70% 含未见服务）：SGD 基线 25.4% JGA（AAAI 2020）；D3ST-XXL（T5-11B, 2022）达 86.4% 总 JGA（已见 95.8% / 未见 83.3%）。',
+    },
+    sotaZeroShot: {
+      en: 'Pure zero-shot LLM prompting struggles on strict multi-turn JGA; FnCTOD (Li et al., ACL 2024) reframes schemas as function calls (+5.6% avg JGA; +14% GPT-4 / +4.8% GPT-3.5 across TOD/DST). Full 4,201-dlg API evaluation is costly.',
+      zh: '纯零样本 LLM 直接提示在严格多轮 JGA 上吃力；FnCTOD（ACL 2024）将 Schema 转为函数调用，平均提分 +5.6% JGA（GPT-4 +14% / GPT-3.5 +4.8%）。4,201 段测试对话使前沿 API 评测成本偏高。',
+    },
+    pros: {
+      en: 'Gold standard for schema-driven zero-shot DST; realistic overlapping APIs per domain; explicit categorical vs non-categorical split.',
+      zh: 'Schema 驱动零样本 DST 的黄金标准；同域多套重叠 API 贴近真实业务；明确区分枚举与抽取槽位。',
+    },
+    cons: {
+      en: 'Paraphrased M2M dialogue skeletons feel more templated than organic human chats; huge test set limits exhaustive LLM API sweeps.',
+      zh: '基于机对机骨架改写，口语自然度略逊于真人对话；测试集庞大导致商业 LLM 完整跑分昂贵。',
+    },
+  },
+  {
+    id: 'multiwoz',
+    name: 'MultiWOZ (2.0–2.4)',
+    year: '2018–2022',
+    citation: 'Budzianowski et al., 2018 → Ye et al., 2022',
+    turn: 'multi',
+    scope: 'deep-dive',
+    langGroup: 'en',
+    languages: { en: 'EN', zh: '英文' },
+    domains: { en: '7 (5 eval)', zh: '7 域（5 评测域）' },
+    scale: {
+      en: '10,438 dialogues (8,438/1k/1k) · ~115.4k+ turns · 30 active eval slots (61 in v2.2)',
+      zh: '10,438 段对话（8,438/1k/1k）· ~11.54 万+ 轮 · 30 个标准评测槽位（v2.2 共 61 槽位）',
+    },
+    schemaType: { en: 'Multi-domain DST (v2.2 Cat + Span)', zh: '多域累积 DST（v2.2 枚举 + 片段）' },
+    tags: ['dst', 'zero-shot'],
+    challenge: {
+      en: '17–19 pt version noise gap (v2.1 vs v2.4), cross-turn carry-over & canonicalization',
+      zh: '版本标注噪声差达 17–19 分（v2.1 vs v2.4）、跨轮状态继承与值规范化',
+    },
+    sotaFull: {
+      en: 'v2.1 → denoised v2.4 JGA (same train): STAR 56.36% → 73.62% (SIGDIAL 2022); D3ST-XXL 57.80% (v2.1) / 58.70% (v2.2) / 75.90% (v2.4); LDST (LLaMA-7B, EMNLP 2023) 60.65% → 79.94%.',
+      zh: '同训练集在 v2.1 → 清洗版 v2.4 上的 JGA：STAR 56.36% → 73.62%（SIGDIAL 2022）；D3ST-XXL 57.80% (v2.1) / 58.70% (v2.2) / 75.90% (v2.4)；LDST（LLaMA-7B, EMNLP 2023）60.65% → 79.94%。',
+    },
+    sotaZeroShot: {
+      en: 'Full 5-domain zero-shot JGA (v2.1): ChatGPT 31.5% (SIGDIAL 2023); FnCTOD GPT-4 ~38.71% (ACL 2024). Caution: Single-domain LODO avg JGA on v2.0 (ChatGPT 77.58%, LDST 75.03%, EMNLP 2023) evaluates one domain at a time — NOT comparable to full 5-domain JGA.',
+      zh: '全 5 域联合零样本 JGA（v2.1）：ChatGPT 31.5%（SIGDIAL 2023）；FnCTOD GPT-4 ~38.71%（ACL 2024）。注意：v2.0 单域留一平均 JGA（ChatGPT 77.58% / LDST 75.03%）每次仅评单域，与全 5 域联合 JGA 不可直接比较。',
+    },
+    pros: {
+      en: 'Most widely studied multi-turn DST testbed; natural human-human phrasing; rich version history isolates label noise from model capability.',
+      zh: '研究最充分的多轮 DST 基准，真人对话自然度高；多版本演进便于剥离标注噪声与真实模型能力。',
+    },
+    cons: {
+      en: 'Severe legacy label noise in v2.0–v2.1; narrow Cambridge travel ontology; high pretraining contamination risk for frontier LLMs.',
+      zh: 'v2.0–v2.1 存在大量历史标注错误；本体局限于剑桥出行；前沿 LLM 预训练数据污染风险高。',
+    },
+  },
+  {
+    id: 'restaurant8k',
+    name: 'Restaurant8k',
+    year: '2020',
+    citation: 'Coope et al., ACL 2020',
+    turn: 'multi',
+    scope: 'deep-dive',
+    langGroup: 'en',
+    languages: { en: 'EN', zh: '英文' },
+    domains: { en: '1 (Dining)', zh: '1（餐厅预订）' },
+    scale: {
+      en: '11,929 utts (8,198 train / 3,731 test; 8 few-shot splits down to 32) · 5 slots',
+      zh: '11,929 条话语（8,198 训练 / 3,731 测试；8 档少样本低至 32 条）· 5 类槽位',
+    },
+    schemaType: { en: 'Contextual spans (requestedSlots)', zh: '上下文片段抽取（requestedSlots）' },
+    tags: ['low-resource', 'zero-shot'],
+    challenge: {
+      en: 'Cryptic 1-word replies ("7") unsolvable without prior system prompt context',
+      zh: '极简口语回复（如 "7"）脱离上轮系统提问上下文即无法消歧',
+    },
+    sotaFull: {
+      en: '100% train Macro Span F1: Span-ConveRT 96.0% vs Span-BERT 92.0% (ACL 2020); ConVEx 96.0% (Henderson & Vulić, NAACL 2021).',
+      zh: '全量训练宏平均 Span F1：Span-ConveRT 96.0%（Span-BERT 92.0%，ACL 2020）；ConVEx 96.0%（NAACL 2021）。',
+    },
+    sotaZeroShot: {
+      en: 'Extreme few-shot Macro Span F1: ConVEx Ensemble 78.2% at 1/64 (128 ex) / 73.5% at 1/128 (64 ex) (NAACL 2021); QASL with requestedSlots context reaches 87.9% (1/64) / 85.8% (1/128) on ambiguous turns.',
+      zh: '极低资源宏平均 Span F1：ConVEx 集成在 1/64（128 条）达 78.2%、1/128（64 条）达 73.5%（NAACL 2021）；显式引入 requestedSlots 的 QASL 在歧义样本上达 87.9% / 85.8%。',
+    },
+    pros: {
+      en: 'Authentic commercial conversations (terse, messy); cleanest benchmark isolating low-resource span extraction & requestedSlots disambiguation.',
+      zh: '源自真实商业订餐对话，极简口语贴近实战；最清晰地隔离低资源片段抽取与上下文消歧。',
+    },
+    cons: {
+      en: 'Single domain with only 5 slots (date, time, people, first_name, last_name); not full cumulative DST; English-only.',
+      zh: '仅单领域 5 类槽位（日期/时间/人数/名/姓），非完整累积状态追踪；仅英文。',
+    },
+  },
+  {
+    id: 'crosswoz',
+    name: 'CrossWOZ',
+    year: '2020',
+    citation: 'Zhu et al., TACL 2020',
+    turn: 'multi',
+    scope: 'deep-dive',
+    langGroup: 'zh',
+    languages: { en: 'ZH (Simplified)', zh: '简体中文' },
+    domains: { en: '5 (Travel)', zh: '5 域（北京出行）' },
+    scale: {
+      en: '6,012 dialogues (5,012/500/500) · ~102.5k turns (~16.9/dlg) · 72 slots (~60% cross-domain)',
+      zh: '6,012 段对话（5,012/500/500）· ~10.25 万轮（均值 16.9 轮）· 72 槽位（~60% 跨领域依赖）',
+    },
+    schemaType: { en: 'Cross-domain DST + acts', zh: '跨领域依赖 DST + 对话行为' },
+    tags: ['dst', 'zero-shot'],
+    challenge: {
+      en: 'Inter-domain entity propagation, Chinese segmentation & exact POI matching',
+      zh: '跨领域属性约束传递、中文分词边界差异与精确 POI 实体匹配',
+    },
+    sotaFull: {
+      en: 'Joint State / Goal Accuracy (test): TRADE 36.08% overall (71.67% single-subgoal vs 25.65% complex cross-domain CM+T; TACL 2020); Mars-G 59.8% JGA.',
+      zh: '测试集联合状态准确率（JGA）：TRADE 总体 36.08%（单子目标 71.67%，复杂跨领域 CM+T 仅 25.65%；TACL 2020）；Mars-G 达 59.8% JGA。',
+    },
+    sotaZeroShot: {
+      en: 'Standardized zero-shot LLM JGA leaderboards remain sparse compared to MultiWOZ; strict Chinese entity normalization penalizes exact-match JGA.',
+      zh: '相比 MultiWOZ，标准化零样本 LLM JGA 榜单仍较稀缺；严格中文实体规范化容易拉低精确匹配 JGA。',
+    },
+    pros: {
+      en: 'First large-scale Chinese WoZ corpus; ~60% of dialogues require true inter-domain constraint propagation (e.g., dining near a chosen attraction).',
+      zh: '首个大规模中文 WoZ 数据集，约 60% 对话包含真实跨领域属性联动（如围绕已选景点找周边餐厅）。',
+    },
+    cons: {
+      en: '5 Beijing-centric travel domains; lacks an official denoised v2.4 re-annotation.',
+      zh: '限于北京出行 5 域；缺乏类似 MultiWOZ 2.4 的官方全面去噪重标版。',
+    },
+  },
+  {
+    id: 'risawoz',
+    name: 'RiSAWOZ',
+    year: '2020',
+    citation: 'Quan et al., EMNLP 2020',
+    turn: 'multi',
+    scope: 'deep-dive',
+    langGroup: 'zh',
+    languages: { en: 'ZH (Simplified)', zh: '简体中文' },
+    domains: { en: '12 domains', zh: '12 个领域' },
+    scale: {
+      en: '11,200 dialogues (10k/600/600) · >150k turns (~13–14/dlg) · ~159 slots',
+      zh: '11,200 段对话（10k/600/600）· >15 万轮（均值 13–14 轮）· ~159 类槽位',
+    },
+    schemaType: { en: 'DST + coreference & ellipsis', zh: '多域 DST + 共指与省略标注' },
+    tags: ['dst'],
+    challenge: {
+      en: 'Chinese pro-drop / zero-anaphora ellipsis & long-tail domain ontologies',
+      zh: '中文口语高频零指代省略（如“价格便宜点的”）与长尾垂直领域本体',
+    },
+    sotaFull: {
+      en: 'Joint Goal Accuracy (test, EMNLP 2020): TRADE 58.19% overall (65.35% single / 50.49% multi-domain); MLCSG 66.16% overall (73.04% single / 58.77% multi-domain).',
+      zh: '测试集 JGA（EMNLP 2020）：TRADE 总体 58.19%（单域 65.35% / 多域 50.49%）；MLCSG 总体 66.16%（单域 73.04% / 多域 58.77%）。',
+    },
+    sotaZeroShot: {
+      en: 'Standardized zero-shot LLM benchmarks on RiSAWOZ remain sparse — an open gap for Chinese multi-domain evaluation.',
+      zh: '针对 RiSAWOZ 的标准化零样本 LLM 评测仍十分稀缺，是中文多域对话评测的明显空白。',
+    },
+    pros: {
+      en: 'Broadest Chinese multi-domain coverage (12 domains beyond travel: PCs, cars, TV, courses, hospitals); explicit coreference & ellipsis labels.',
+      zh: '中文多域覆盖最广（12 域，涵盖电脑/汽车/课程/医院等非出行场景），且提供显式共指与省略标注。',
+    },
+    cons: {
+      en: 'Higher single-domain share (~65%) than MultiWOZ/CrossWOZ; lower adoption in international LLM eval suites.',
+      zh: '单域对话占比偏高（~65%），在国际主流 LLM 评测套件中的采用度较低。',
+    },
+  },
+
+  // === QUICK LANDSCAPE OVERVIEW: SINGLE-TURN ===
+  {
+    id: 'multiatis-pp',
+    name: 'MultiATIS++',
+    year: '2020',
+    citation: 'Xu, Haider, & Mansour, EMNLP 2020',
+    turn: 'single',
+    scope: 'landscape',
+    langGroup: 'multilingual',
+    languages: { en: '9 langs', zh: '9 种语言' },
+    domains: { en: '1 (Air Travel)', zh: '1（航空出行）' },
+    scale: {
+      en: '~34k+ utts (~1.4k–5.8k/lang across EN, ES, DE, FR, PT, ZH, JA, HI, TR) · 21–26 intents · ~99–140 slot tags',
+      zh: '~3.4 万+ 话语（覆盖英/西/德/法/葡/中/日/印/土 9 语种）· 21–26 意图 · ~99–140 槽位标签',
+    },
+    schemaType: { en: 'Translated role BIO', zh: '人工翻译对齐角色 BIO' },
+    tags: ['zero-shot'],
+    challenge: {
+      en: 'Cross-lingual slot projection & word-order divergence on fine-grained role slots',
+      zh: '细粒度角色槽位的跨语投影与跨语序边界错位',
+    },
+  },
+  {
+    id: 'mixsnips-mixatis',
+    name: 'MixSNIPS & MixATIS',
+    year: '2020',
+    citation: 'Qin et al., Findings EMNLP 2020',
+    turn: 'single',
+    scope: 'landscape',
+    langGroup: 'en',
+    languages: { en: 'EN', zh: '英文' },
+    domains: { en: '7 / 1', zh: '7 / 1' },
+    scale: {
+      en: 'MixSNIPS: 44,173 utts (7 intents, 39 slots); MixATIS: 14,748 utts (18 intents, ~84–120 tags)',
+      zh: 'MixSNIPS：44,173 条（7 意图，39 槽位）；MixATIS：14,748 条（18 意图，~84–120 标签）',
+    },
+    schemaType: { en: 'Multi-intent (1–3) + BIO', zh: '多意图（1–3）+ 耦合 BIO' },
+    tags: ['multi-intent'],
+    challenge: {
+      en: 'Disentangling which slots bind to which co-occurring intent in one turn',
+      zh: '单轮拼接多意图时，拆解各槽位与对应意图的归属耦合',
+    },
+  },
+  {
+    id: 'hwu64',
+    name: 'HWU64 (NLU-Eval-Data)',
+    year: '2019',
+    citation: 'Liu et al., IWSDS 2019',
+    turn: 'single',
+    scope: 'landscape',
+    langGroup: 'en',
+    languages: { en: 'EN', zh: '英文' },
+    domains: { en: '21 (Home)', zh: '21（家居助手）' },
+    scale: {
+      en: '25,716 total annotated utts (~11k–25.7k by split) · 64 intents · 54 slot types',
+      zh: '共 25,716 条标注话语（不同划分 1.1 万–2.57 万）· 64 意图 · 54 类槽位',
+    },
+    schemaType: { en: 'Flat BIO (SLURP precursor)', zh: '扁平 BIO（SLURP 前身）' },
+    tags: ['low-resource'],
+    challenge: {
+      en: 'Broad 21-domain coverage; frequently misused as an intent-only benchmark',
+      zh: '21 域覆盖面广，但常被论文误用为纯意图分类基准',
+    },
+  },
+  {
+    id: 'stop',
+    name: 'STOP',
+    year: '2022',
+    citation: 'Tomasello et al., IEEE SLT 2022',
+    turn: 'single',
+    scope: 'landscape',
+    langGroup: 'en',
+    languages: { en: 'EN (Spoken)', zh: '英文（语音）' },
+    domains: { en: '8 (TOPv2)', zh: '8（继承 TOPv2）' },
+    scale: {
+      en: '236,477 audio clips (218 hrs, 885 speakers; 125k TOPv2 parses) · 80 intents · 82 slots',
+      zh: '236,477 条语音（218 小时，885 说话人；源于 12.5 万 TOPv2 解析）· 80 意图 · 82 槽位',
+    },
+    schemaType: { en: 'Spoken nested parse trees', zh: '语音层级嵌套语义树' },
+    tags: ['spoken-asr', 'nested'],
+    challenge: {
+      en: 'End-to-end audio-to-nested-tree parsing under acoustic & ASR variation',
+      zh: '声学变异与 ASR 误差下的端到端语音到嵌套树解析',
+    },
+  },
+  {
+    id: 'cais',
+    name: 'CAIS',
+    year: '2019',
+    citation: 'Liu et al., EMNLP-IJCNLP 2019',
+    turn: 'single',
+    scope: 'landscape',
+    langGroup: 'zh',
+    languages: { en: 'ZH', zh: '中文' },
+    domains: { en: 'Smart Speaker', zh: '智能音箱多域' },
+    scale: {
+      en: '10,001 utts (7,995 / 994 / ~1,012) · 11 intents · ~24 slot types (75 BIOES tags)',
+      zh: '10,001 条话语（7,995 / 994 / ~1,012）· 11 意图 · ~24 类槽位（75 BIOES 标签）',
+    },
+    schemaType: { en: 'Character-level BIOES', zh: '字级 BIOES 片段' },
+    tags: ['spoken-asr'],
+    challenge: {
+      en: 'Chinese character-level segmentation ambiguity & colloquial voice commands',
+      zh: '中文字级切分边界歧义与真实智能音箱口语指令',
+    },
+  },
+  {
+    id: 'smp-ecdt',
+    name: 'SMP-ECDT (2017 / 2019)',
+    year: '2017 / 2019',
+    citation: 'CIPS-SMP / HIT / iFLYTEK',
+    turn: 'single',
+    scope: 'landscape',
+    langGroup: 'zh',
+    languages: { en: 'ZH', zh: '中文' },
+    domains: { en: '~30 / Multi', zh: '~30 域 / 多域' },
+    scale: {
+      en: '2017 Task 1: 3,735 utts (31 intents, 0 slots); 2019-ECDT: ~3,609 utts (24 intents, 124 slots)',
+      zh: '2017 任务一：3,735 条（31 意图，0 槽位）；2019-ECDT：~3,609 条（24 意图，124 槽位）',
+    },
+    schemaType: { en: 'Production SLU (2019 slots)', zh: '产业 SLU（仅 2019 含槽位）' },
+    tags: ['low-resource'],
+    challenge: {
+      en: 'Pitfall: SMP2017 Task 1 is intent-only; only SMP2019-ECDT carries full slot labels',
+      zh: '避坑：SMP2017 任务一仅有意图，仅 SMP2019-ECDT 含完整槽位标注',
+    },
+  },
+
+  // === QUICK LANDSCAPE OVERVIEW: MULTI-TURN ===
+  {
+    id: 'dstc2',
+    name: 'DSTC2',
+    year: '2014',
+    citation: 'Henderson et al., SIGDIAL 2014',
+    turn: 'multi',
+    scope: 'landscape',
+    langGroup: 'en',
+    languages: { en: 'EN (ASR N-best)', zh: '英文（语音 ASR）' },
+    domains: { en: '1 (Dining)', zh: '1（剑桥餐厅）' },
+    scale: {
+      en: '~3,324 dialogues (1,117 test) · ~25k–27k turns (~7.9/dlg) · 3 informable + 8 requestable slots',
+      zh: '~3,324 段对话（1,117 测试）· ~2.5–2.7 万轮（均值 7.9 轮）· 3 可告知 + 8 可查询槽位',
+    },
+    schemaType: { en: 'Closed-ontology DST', zh: '封闭本体 DST 先驱' },
+    tags: ['dst', 'spoken-asr'],
+    challenge: {
+      en: 'Noisy ASR N-best hypotheses, word confusion networks & mid-dialogue goal shifts',
+      zh: '高噪声 ASR N-best 候选、词混淆网络与对话中途目标变更',
+    },
+  },
+  {
+    id: 'woz2',
+    name: 'WOZ 2.0',
+    year: '2017',
+    citation: 'Wen et al., EACL 2017; Mrkšić et al., ACL 2017',
+    turn: 'multi',
+    scope: 'landscape',
+    langGroup: 'en',
+    languages: { en: 'EN (Text)', zh: '英文（文本）' },
+    domains: { en: '1 (Dining)', zh: '1（剑桥餐厅）' },
+    scale: {
+      en: '1,200 dialogues (600 / 200 / 400) · ~9,600 turns (~8/dlg) · 3 informable slots',
+      zh: '1,200 段对话（600 / 200 / 400）· ~9,600 轮（均值 8 轮）· 3 类可告知槽位',
+    },
+    schemaType: { en: 'Text-only closed DST', zh: '纯文本封闭本体 DST' },
+    tags: ['dst'],
+    challenge: {
+      en: 'Decoupled DST from ASR noise; tiny single-domain closed ontology (now saturated)',
+      zh: '将 DST 与 ASR 噪声剥离，但单域封闭本体体量小且早已饱和',
+    },
+  },
+  {
+    id: 'bitod',
+    name: 'BiToD',
+    year: '2021',
+    citation: 'Lin et al., NeurIPS 2021',
+    turn: 'multi',
+    scope: 'landscape',
+    langGroup: 'multilingual',
+    languages: { en: 'EN + ZH', zh: '中英双语' },
+    domains: { en: '5 domains', zh: '5 个领域' },
+    scale: {
+      en: '7,232 dialogues (3,689 EN + 3,543 ZH; 5,787/542/902) · 144,798 turns',
+      zh: '7,232 段对话（3,689 英文 + 3,543 中文；5,787/542/902）· 144,798 轮话语',
+    },
+    schemaType: { en: 'Bilingual KB-grounded DST', zh: '双语知识库对齐 DST' },
+    tags: ['dst', 'zero-shot'],
+    challenge: {
+      en: 'Cross-lingual & zero-shot bilingual state transfer across shared KB schemas',
+      zh: '共享知识库 Schema 下的中英跨语与零样本状态迁移',
+    },
+  },
+  {
+    id: 'raddle',
+    name: 'RADDLE',
+    year: '2021',
+    citation: 'Peng et al., ACL-IJCNLP 2021',
+    turn: 'multi',
+    scope: 'landscape',
+    langGroup: 'en',
+    languages: { en: 'EN', zh: '英文' },
+    domains: { en: 'Multi-domain', zh: '多领域套件' },
+    scale: {
+      en: 'Multi-domain TOD suite (restaurant, movie, taxi, coffee, etc.) + robustness checklist',
+      zh: '多域任务对话套件（餐厅/电影/出租/咖啡等）+ 鲁棒性诊断清单',
+    },
+    schemaType: { en: 'Few-shot & robustness TOD', zh: '少样本与鲁棒性诊断' },
+    tags: ['dst', 'robustness', 'low-resource', 'spoken-asr'],
+    challenge: {
+      en: 'Paraphrases, typos, verbosity, ASR noise, unseen entities & OOD utterances',
+      zh: '改写、拼写错误、冗余/精简、ASR 噪声、未见实体与域外话语扰动',
+    },
+  },
+];
+
+const ui = {
+  regionLabel: isZh ? '槽位填充基准交互对比矩阵' : 'Interactive slot-filling benchmark matrix',
+  title: isZh ? '基准交互筛选矩阵' : 'Interactive Benchmark Matrix',
+  hint: isZh ? '点击任意一行展开规模、SOTA 溯源与优缺点' : 'Click any row to expand scale, SOTA provenance, and caveats',
+  scopeLabel: isZh ? '范围' : 'Scope',
+  turnLabel: isZh ? '轮次' : 'Turn',
+  langLabel: isZh ? '语言' : 'Language',
+  tagLabel: isZh ? '特性' : 'Tags',
+  searchPlaceholder: isZh ? '搜索数据集、槽位特性、引用或挑战…' : 'Search dataset, schema, citation, or challenge…',
+  searchLabel: isZh ? '筛选关键词' : 'Filter benchmarks by keyword',
+  all: isZh ? '全部' : 'All',
+  deepDive: isZh ? '深度精讲' : 'Deep-Dive',
+  landscape: isZh ? '全景速览' : 'Landscape',
+  singleTurn: isZh ? '单轮' : 'Single-turn',
+  multiTurn: isZh ? '多轮' : 'Multi-turn',
+  langEn: isZh ? '英文' : 'English',
+  langMulti: isZh ? '多语 / 双语' : 'Multilingual',
+  langZh: isZh ? '中文' : 'Chinese',
+  expandAll: isZh ? '展开全部' : 'Expand all',
+  collapseAll: isZh ? '收起全部' : 'Collapse all',
+  reset: isZh ? '重置' : 'Reset',
+  colDataset: isZh ? '数据集' : 'Dataset',
+  colTurnLang: isZh ? '轮次 · 语言' : 'Turn · Lang',
+  colSchema: isZh ? '领域与 Schema' : 'Domains & Schema',
+  colChallenge: isZh ? '零样本 / LLM 核心挑战' : 'Zero-Shot / LLM Challenge',
+  detailScale: isZh ? '规模与划分' : 'Scale & Splits',
+  detailCitation: isZh ? '主要引用' : 'Primary Citation',
+  detailSchema: isZh ? 'Schema 类型' : 'Schema Type',
+  detailFullSota: isZh ? '全量 SOTA' : 'Full-Shot SOTA',
+  detailZsSota: isZh ? '零样本 / 少样本 / LLM' : 'Zero-Shot / Few-Shot / LLM',
+  detailPros: isZh ? '优势' : 'Strengths',
+  detailCons: isZh ? '局限' : 'Caveats',
+  emptyTitle: isZh ? '没有符合当前筛选条件的基准。' : 'No benchmarks match the active filters.',
+  pitfallNote: isZh
+    ? '注：Banking77（77 意图、0 槽位）与 CLINC150（150 意图 + OOS、0 槽位）属于纯意图 / 域外检测数据集，不提供槽位标注，故未列入本矩阵。'
+    : 'Note: Banking77 (77 intents, 0 slots) and CLINC150 (150 intents + OOS, 0 slots) are intent/OOS-only datasets with no slot spans, so they are intentionally excluded from this matrix.',
+};
+
+const totalCount = benchmarks.length;
+const initialSummary = isZh
+  ? `显示 ${totalCount} / ${totalCount} 个基准`
+  : `Showing ${totalCount} of ${totalCount} benchmarks`;
+---
+
+<slot-benchmark-matrix
+  data-lang={lang}
+  data-default-scope={defaultScope}
+  data-default-turn={defaultTurn}
+  data-total={totalCount}
+  role="region"
+  aria-label={ui.regionLabel}
+>
+  <div class="bm-header">
+    <div class="bm-title-group">
+      <h5 class="bm-title" id={`${idPrefix}bm-heading`}>{ui.title}</h5>
+      <span class="bm-hint">{ui.hint}</span>
+    </div>
+    <div class="bm-header-actions">
+      <output class="bm-count" aria-live="polite">{initialSummary}</output>
+      <button type="button" class="bm-text-btn" data-action="toggle-all" data-expanded="false">
+        {ui.expandAll}
+      </button>
+      <button type="button" class="bm-text-btn" data-action="reset" hidden>
+        {ui.reset}
+      </button>
+    </div>
+  </div>
+
+  <div class="bm-controls" aria-labelledby={`${idPrefix}bm-heading`}>
+    <div class="bm-filter-groups">
+      <div class="bm-group" role="group" aria-label={ui.scopeLabel}>
+        <span class="bm-group-label">{ui.scopeLabel}</span>
+        <div class="bm-pills">
+          <button type="button" class="bm-pill" data-filter="scope" data-value="all" aria-pressed={defaultScope === 'all' ? 'true' : 'false'}>{ui.all}</button>
+          <button type="button" class="bm-pill" data-filter="scope" data-value="deep-dive" aria-pressed={defaultScope === 'deep-dive' ? 'true' : 'false'}>{ui.deepDive}</button>
+          <button type="button" class="bm-pill" data-filter="scope" data-value="landscape" aria-pressed={defaultScope === 'landscape' ? 'true' : 'false'}>{ui.landscape}</button>
+        </div>
+      </div>
+
+      <div class="bm-group" role="group" aria-label={ui.turnLabel}>
+        <span class="bm-group-label">{ui.turnLabel}</span>
+        <div class="bm-pills">
+          <button type="button" class="bm-pill" data-filter="turn" data-value="all" aria-pressed={defaultTurn === 'all' ? 'true' : 'false'}>{ui.all}</button>
+          <button type="button" class="bm-pill" data-filter="turn" data-value="single" aria-pressed={defaultTurn === 'single' ? 'true' : 'false'}>{ui.singleTurn}</button>
+          <button type="button" class="bm-pill" data-filter="turn" data-value="multi" aria-pressed={defaultTurn === 'multi' ? 'true' : 'false'}>{ui.multiTurn}</button>
+        </div>
+      </div>
+
+      <div class="bm-group" role="group" aria-label={ui.langLabel}>
+        <span class="bm-group-label">{ui.langLabel}</span>
+        <div class="bm-pills">
+          <button type="button" class="bm-pill" data-filter="lang" data-value="all" aria-pressed="true">{ui.all}</button>
+          <button type="button" class="bm-pill" data-filter="lang" data-value="en" aria-pressed="false">{ui.langEn}</button>
+          <button type="button" class="bm-pill" data-filter="lang" data-value="multilingual" aria-pressed="false">{ui.langMulti}</button>
+          <button type="button" class="bm-pill" data-filter="lang" data-value="zh" aria-pressed="false">{ui.langZh}</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="bm-search-tags">
+      <label class="bm-search-wrap" for={`${idPrefix}bm-search`}>
+        <span class="sr-only">{ui.searchLabel}</span>
+        <input
+          id={`${idPrefix}bm-search`}
+          class="bm-search"
+          type="search"
+          placeholder={ui.searchPlaceholder}
+          autocomplete="off"
+          spellcheck="false"
+        />
+      </label>
+      <div class="bm-tags-row" role="group" aria-label={ui.tagLabel}>
+        <span class="bm-group-label">{ui.tagLabel}</span>
+        <div class="bm-pills">
+          {tagOrder.map((tag) => (
+            <button
+              type="button"
+              class="bm-chip"
+              data-filter="tag"
+              data-value={tag}
+              aria-pressed="false"
+            >
+              {t(tagLabels[tag])}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="bm-table-head" aria-hidden="true">
+    <span>{ui.colDataset}</span>
+    <span>{ui.colTurnLang}</span>
+    <span>{ui.colSchema}</span>
+    <span>{ui.colChallenge}</span>
+    <span></span>
+  </div>
+
+  <div class="bm-list">
+    {benchmarks.map((item) => {
+      const searchBlob = [
+        item.name,
+        item.year,
+        item.citation,
+        item.languages.en,
+        item.languages.zh,
+        item.domains.en,
+        item.domains.zh,
+        item.scale.en,
+        item.scale.zh,
+        item.schemaType.en,
+        item.schemaType.zh,
+        item.challenge.en,
+        item.challenge.zh,
+        item.sotaFull?.en ?? '',
+        item.sotaFull?.zh ?? '',
+        item.sotaZeroShot?.en ?? '',
+        item.sotaZeroShot?.zh ?? '',
+        ...item.tags.flatMap((tag) => [tag, tagLabels[tag].en, tagLabels[tag].zh]),
+      ]
+        .join(' ')
+        .toLowerCase();
+
+      return (
+        <details
+          class="bm-row"
+          data-id={item.id}
+          data-turn={item.turn}
+          data-scope={item.scope}
+          data-lang-group={item.langGroup}
+          data-tags={item.tags.join(',')}
+          data-search={searchBlob}
+        >
+          <summary class="bm-summary">
+            <span class="bm-cell bm-cell-name">
+              <strong class="bm-name">{item.name}</strong>
+              <span class="bm-meta-line">
+                <span class="bm-year">{item.year}</span>
+                <span class={`bm-scope-badge ${item.scope === 'deep-dive' ? 'is-deep' : 'is-land'}`}>
+                  {item.scope === 'deep-dive' ? ui.deepDive : ui.landscape}
+                </span>
+              </span>
+            </span>
+
+            <span class="bm-cell bm-cell-turn">
+              <span class="bm-badge">{item.turn === 'single' ? ui.singleTurn : ui.multiTurn}</span>
+              <span class="bm-sub">{t(item.languages)}</span>
+            </span>
+
+            <span class="bm-cell bm-cell-schema">
+              <span class="bm-primary">{t(item.domains)}</span>
+              <span class="bm-sub">{t(item.schemaType)}</span>
+            </span>
+
+            <span class="bm-cell bm-cell-challenge">
+              <span class="bm-challenge-text">{t(item.challenge)}</span>
+            </span>
+
+            <span class="bm-chevron" aria-hidden="true">▸</span>
+          </summary>
+
+          <div class="bm-detail">
+            <dl class="bm-dl">
+              <div class="bm-dl-item">
+                <dt>{ui.detailScale}</dt>
+                <dd>{t(item.scale)}</dd>
+              </div>
+              <div class="bm-dl-item">
+                <dt>{ui.detailCitation}</dt>
+                <dd>{item.citation}</dd>
+              </div>
+              <div class="bm-dl-item">
+                <dt>{ui.detailSchema}</dt>
+                <dd>{t(item.schemaType)}</dd>
+              </div>
+              {item.sotaFull && (
+                <div class="bm-dl-item bm-dl-wide">
+                  <dt>{ui.detailFullSota}</dt>
+                  <dd>{t(item.sotaFull)}</dd>
+                </div>
+              )}
+              {item.sotaZeroShot && (
+                <div class="bm-dl-item bm-dl-wide">
+                  <dt>{ui.detailZsSota}</dt>
+                  <dd>{t(item.sotaZeroShot)}</dd>
+                </div>
+              )}
+              {item.pros && (
+                <div class="bm-dl-item">
+                  <dt>{ui.detailPros}</dt>
+                  <dd>{t(item.pros)}</dd>
+                </div>
+              )}
+              {item.cons && (
+                <div class="bm-dl-item">
+                  <dt>{ui.detailCons}</dt>
+                  <dd>{t(item.cons)}</dd>
+                </div>
+              )}
+            </dl>
+            <div class="bm-detail-tags">
+              {item.tags.map((tag) => (
+                <span class="bm-tag-pill">{t(tagLabels[tag])}</span>
+              ))}
+            </div>
+          </div>
+        </details>
+      );
+    })}
+  </div>
+
+  <div class="bm-empty" hidden>
+    <span>{ui.emptyTitle}</span>
+    <button type="button" class="bm-text-btn" data-action="reset">
+      {ui.reset}
+    </button>
+  </div>
+
+  <p class="bm-footnote">{ui.pitfallNote}</p>
+</slot-benchmark-matrix>
+
+<script>
+  class SlotBenchmarkMatrix extends HTMLElement {
+    connectedCallback() {
+      if (this.dataset.ready === 'true') return;
+      this.dataset.ready = 'true';
+
+      const isZh = this.dataset.lang === 'zh';
+      const defaultScope = this.dataset.defaultScope || 'all';
+      const defaultTurn = this.dataset.defaultTurn || 'all';
+      const total = Number(this.dataset.total || '0');
+
+      const rows = Array.from(this.querySelectorAll<HTMLDetailsElement>('.bm-row'));
+      const filterButtons = Array.from(
+        this.querySelectorAll<HTMLButtonElement>('button[data-filter]'),
+      );
+      const searchInput = this.querySelector<HTMLInputElement>('.bm-search');
+      const countOutput = this.querySelector<HTMLOutputElement>('.bm-count');
+      const emptyState = this.querySelector<HTMLElement>('.bm-empty');
+      const toggleAllBtn = this.querySelector<HTMLButtonElement>('button[data-action="toggle-all"]');
+      const resetBtns = Array.from(
+        this.querySelectorAll<HTMLButtonElement>('button[data-action="reset"]'),
+      );
+
+      let activeScope = defaultScope;
+      let activeTurn = defaultTurn;
+      let activeLang = 'all';
+      let query = '';
+      const activeTags = new Set<string>();
+
+      const updateCount = (visibleCount: number) => {
+        if (!countOutput) return;
+        countOutput.textContent = isZh
+          ? `显示 ${visibleCount} / ${total} 个基准`
+          : `Showing ${visibleCount} of ${total} benchmarks`;
+      };
+
+      const syncToggleAllLabel = () => {
+        if (!toggleAllBtn) return;
+        const visibleRows = rows.filter((row) => !row.hidden);
+        const allOpen = visibleRows.length > 0 && visibleRows.every((row) => row.open);
+        toggleAllBtn.dataset.expanded = allOpen ? 'true' : 'false';
+        toggleAllBtn.textContent = allOpen
+          ? isZh
+            ? '收起全部'
+            : 'Collapse all'
+          : isZh
+            ? '展开全部'
+            : 'Expand all';
+        toggleAllBtn.hidden = visibleRows.length === 0;
+      };
+
+      const syncButtons = () => {
+        for (const btn of filterButtons) {
+          const kind = btn.dataset.filter;
+          const val = btn.dataset.value || '';
+          let pressed = false;
+          if (kind === 'scope') pressed = val === activeScope;
+          else if (kind === 'turn') pressed = val === activeTurn;
+          else if (kind === 'lang') pressed = val === activeLang;
+          else if (kind === 'tag') pressed = activeTags.has(val);
+          btn.setAttribute('aria-pressed', pressed ? 'true' : 'false');
+        }
+
+        const isDirty =
+          activeScope !== defaultScope ||
+          activeTurn !== defaultTurn ||
+          activeLang !== 'all' ||
+          activeTags.size > 0 ||
+          query.trim().length > 0;
+
+        for (const btn of resetBtns) {
+          if (btn.closest('.bm-header-actions')) {
+            btn.hidden = !isDirty;
+          }
+        }
+      };
+
+      const applyFilters = () => {
+        const terms = query
+          .trim()
+          .toLowerCase()
+          .split(/\s+/)
+          .filter(Boolean);
+
+        let visibleCount = 0;
+
+        for (const row of rows) {
+          const matchScope = activeScope === 'all' || row.dataset.scope === activeScope;
+          const matchTurn = activeTurn === 'all' || row.dataset.turn === activeTurn;
+          const matchLang = activeLang === 'all' || row.dataset.langGroup === activeLang;
+
+          let matchTags = true;
+          if (activeTags.size > 0) {
+            const rowTags = new Set((row.dataset.tags || '').split(',').filter(Boolean));
+            for (const tag of activeTags) {
+              if (!rowTags.has(tag)) {
+                matchTags = false;
+                break;
+              }
+            }
+          }
+
+          let matchQuery = true;
+          if (terms.length > 0) {
+            const haystack = row.dataset.search || '';
+            matchQuery = terms.every((term) => haystack.includes(term));
+          }
+
+          const visible = matchScope && matchTurn && matchLang && matchTags && matchQuery;
+          row.hidden = !visible;
+          if (visible) visibleCount += 1;
+        }
+
+        if (emptyState) emptyState.hidden = visibleCount > 0;
+        updateCount(visibleCount);
+        syncButtons();
+        syncToggleAllLabel();
+      };
+
+      for (const btn of filterButtons) {
+        btn.addEventListener('click', () => {
+          const kind = btn.dataset.filter;
+          const val = btn.dataset.value || '';
+          if (kind === 'scope') activeScope = val;
+          else if (kind === 'turn') activeTurn = val;
+          else if (kind === 'lang') activeLang = val;
+          else if (kind === 'tag') {
+            if (activeTags.has(val)) activeTags.delete(val);
+            else activeTags.add(val);
+          }
+          applyFilters();
+        });
+      }
+
+      searchInput?.addEventListener('input', () => {
+        query = searchInput.value;
+        applyFilters();
+      });
+
+      toggleAllBtn?.addEventListener('click', () => {
+        const visibleRows = rows.filter((row) => !row.hidden);
+        const shouldOpen = toggleAllBtn.dataset.expanded !== 'true';
+        for (const row of visibleRows) {
+          row.open = shouldOpen;
+        }
+        syncToggleAllLabel();
+      });
+
+      for (const row of rows) {
+        row.addEventListener('toggle', syncToggleAllLabel);
+      }
+
+      for (const btn of resetBtns) {
+        btn.addEventListener('click', () => {
+          activeScope = defaultScope;
+          activeTurn = defaultTurn;
+          activeLang = 'all';
+          activeTags.clear();
+          query = '';
+          if (searchInput) searchInput.value = '';
+          applyFilters();
+        });
+      }
+
+      applyFilters();
+    }
+  }
+
+  if (!customElements.get('slot-benchmark-matrix')) {
+    customElements.define('slot-benchmark-matrix', SlotBenchmarkMatrix);
+  }
+</script>
+
+<style>
+  slot-benchmark-matrix {
+    display: block;
+    min-width: 0;
+    margin-block: 1.75em;
+    container-type: inline-size;
+    --bm-border: color-mix(in srgb, var(--theme-sub-text) 28%, transparent);
+    --bm-border-strong: color-mix(in srgb, var(--theme-sub-text) 52%, transparent);
+    --bm-surface: color-mix(in srgb, var(--theme-code-block) 58%, transparent);
+    --bm-surface-hover: color-mix(in srgb, var(--theme-code-block) 88%, transparent);
+    --bm-accent: light-dark(var(--color-klein-light), #a3bbff);
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .bm-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.4rem 1rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .bm-title-group {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.25rem 0.75rem;
+  }
+
+  .bm-title {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--theme-text);
+  }
+
+  .bm-hint {
+    font-size: 0.78rem;
+    color: var(--theme-sub-text);
+  }
+
+  .bm-header-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.65rem;
+    font-size: 0.78rem;
+  }
+
+  .bm-count {
+    color: var(--theme-sub-text);
+  }
+
+  .bm-text-btn {
+    appearance: none;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    font-size: 0.78rem;
+    color: var(--theme-sub-text);
+    text-decoration: underline;
+    text-decoration-color: var(--theme-link-underline);
+    text-underline-offset: 3px;
+    cursor: pointer;
+  }
+
+  .bm-text-btn[hidden] {
+    display: none;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .bm-text-btn:hover {
+      color: var(--theme-text);
+      text-decoration-color: currentColor;
+      text-decoration-thickness: 2px;
+    }
+  }
+
+  .bm-controls {
+    display: grid;
+    gap: 0.6rem;
+    padding: 0.75rem 0.85rem;
+    border: 1px solid var(--bm-border);
+    background: var(--bm-surface);
+    border-radius: 2px;
+    margin-bottom: 0.6rem;
+  }
+
+  .bm-filter-groups {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.1rem;
+    align-items: center;
+  }
+
+  .bm-group,
+  .bm-tags-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem 0.45rem;
+  }
+
+  .bm-group-label {
+    font-size: 0.72rem;
+    color: var(--theme-sub-text);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+  }
+
+  .bm-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+  }
+
+  .bm-pill,
+  .bm-chip {
+    appearance: none;
+    padding: 0.16rem 0.48rem;
+    border: 1px solid var(--bm-border);
+    border-radius: 2px;
+    background: var(--theme-bg);
+    color: var(--theme-text);
+    font: inherit;
+    font-size: 0.75rem;
+    line-height: 1.45;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+  }
+
+  .bm-chip {
+    background: transparent;
+    color: var(--theme-sub-text);
+  }
+
+  .bm-pill[aria-pressed='true'],
+  .bm-chip[aria-pressed='true'] {
+    background: var(--theme-text);
+    border-color: var(--theme-text);
+    color: var(--theme-bg);
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .bm-pill[aria-pressed='false']:hover,
+    .bm-chip[aria-pressed='false']:hover {
+      border-color: var(--bm-border-strong);
+      color: var(--theme-text);
+      background: var(--bm-surface-hover);
+    }
+  }
+
+  .bm-pill:focus-visible,
+  .bm-chip:focus-visible,
+  .bm-text-btn:focus-visible,
+  .bm-summary:focus-visible,
+  .bm-search:focus-visible {
+    outline: 2px solid transparent;
+    box-shadow: 0 0 0 2px var(--theme-text);
+  }
+
+  .bm-pill:focus-visible,
+  .bm-chip:focus-visible,
+  .bm-text-btn:focus-visible {
+    background-color: var(--theme-text);
+    color: var(--theme-bg);
+    text-decoration-color: transparent;
+  }
+
+  .bm-search-tags {
+    display: grid;
+    gap: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--bm-border);
+  }
+
+  .bm-search-wrap {
+    display: block;
+    width: 100%;
+  }
+
+  .bm-search {
+    width: 100%;
+    padding: 0.34rem 0.6rem;
+    border: 1px solid var(--bm-border);
+    border-radius: 2px;
+    background: var(--theme-bg);
+    color: var(--theme-text);
+    font: inherit;
+    font-size: 0.8rem;
+    line-height: 1.4;
+  }
+
+  .bm-search::placeholder {
+    color: var(--theme-sub-text);
+  }
+
+  .bm-table-head {
+    display: none;
+  }
+
+  .bm-list {
+    border-top: 1px solid var(--bm-border-strong);
+    border-bottom: 1px solid var(--bm-border-strong);
+  }
+
+  .bm-row {
+    border-bottom: 1px solid var(--bm-border);
+  }
+
+  .bm-row:last-child {
+    border-bottom: 0;
+  }
+
+  .bm-row[hidden] {
+    display: none;
+  }
+
+  .bm-summary {
+    list-style: none;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.3rem 0.65rem;
+    padding: 0.65rem 0.5rem;
+    cursor: pointer;
+    align-items: start;
+    transition: background-color 0.12s ease;
+  }
+
+  .bm-summary::-webkit-details-marker {
+    display: none;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .bm-summary:hover {
+      background: var(--bm-surface);
+    }
+  }
+
+  .bm-row[open] > .bm-summary {
+    background: var(--bm-surface);
+  }
+
+  .bm-cell {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    gap: 0.12rem;
+  }
+
+  .bm-cell-name {
+    grid-column: 1;
+  }
+
+  .bm-chevron {
+    grid-column: 2;
+    grid-row: 1;
+    color: var(--theme-sub-text);
+    font-size: 0.8rem;
+    line-height: 1.5;
+    transition: transform 0.15s ease;
+    user-select: none;
+  }
+
+  .bm-row[open] .bm-chevron {
+    transform: rotate(90deg);
+    color: var(--theme-text);
+  }
+
+  .bm-cell-turn {
+    grid-column: 1 / -1;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.45rem;
+  }
+
+  .bm-cell-schema,
+  .bm-cell-challenge {
+    grid-column: 1 / -1;
+  }
+
+  .bm-name {
+    font-size: 0.86rem;
+    font-weight: 700;
+    color: var(--theme-text);
+    line-height: 1.35;
+  }
+
+  .bm-meta-line {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.72rem;
+  }
+
+  .bm-year {
+    color: var(--theme-sub-text);
+  }
+
+  .bm-scope-badge {
+    display: inline-block;
+    padding: 0 0.32rem;
+    border-radius: 2px;
+    font-size: 0.68rem;
+    line-height: 1.45;
+    border: 1px solid var(--bm-border);
+    color: var(--theme-sub-text);
+  }
+
+  .bm-scope-badge.is-deep {
+    border-color: var(--bm-accent);
+    color: var(--bm-accent);
+  }
+
+  .bm-badge {
+    display: inline-block;
+    width: fit-content;
+    padding: 0.04rem 0.35rem;
+    border-radius: 2px;
+    background: var(--theme-code-block);
+    color: var(--theme-text);
+    font-size: 0.72rem;
+    line-height: 1.4;
+    white-space: nowrap;
+  }
+
+  .bm-primary {
+    font-size: 0.8rem;
+    color: var(--theme-text);
+    line-height: 1.4;
+  }
+
+  .bm-sub {
+    font-size: 0.74rem;
+    color: var(--theme-sub-text);
+    line-height: 1.4;
+  }
+
+  .bm-challenge-text {
+    font-size: 0.78rem;
+    color: var(--theme-text);
+    line-height: 1.48;
+  }
+
+  .bm-detail {
+    padding: 0.65rem 0.75rem 0.8rem;
+    border-top: 1px dashed var(--bm-border);
+    background: color-mix(in srgb, var(--theme-code-block) 32%, transparent);
+    font-size: 0.8rem;
+  }
+
+  .bm-dl {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.55rem 1rem;
+    margin: 0;
+  }
+
+  .bm-dl-item {
+    min-width: 0;
+  }
+
+  .bm-dl dt {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--theme-sub-text);
+    margin-bottom: 0.1rem;
+  }
+
+  .bm-dl dd {
+    margin: 0;
+    color: var(--theme-text);
+    line-height: 1.55;
+    overflow-wrap: anywhere;
+  }
+
+  .bm-detail-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    margin-top: 0.65rem;
+    padding-top: 0.55rem;
+    border-top: 1px solid var(--bm-border);
+  }
+
+  .bm-tag-pill {
+    padding: 0.05rem 0.4rem;
+    border: 1px solid var(--bm-border);
+    border-radius: 2px;
+    font-size: 0.7rem;
+    color: var(--theme-sub-text);
+    background: var(--theme-bg);
+  }
+
+  .bm-empty {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 0.6rem;
+    padding: 1.5rem 1rem;
+    font-size: 0.82rem;
+    color: var(--theme-sub-text);
+    border-bottom: 1px solid var(--bm-border-strong);
+  }
+
+  .bm-empty[hidden] {
+    display: none;
+  }
+
+  .bm-footnote {
+    margin: 0.65rem 0 0;
+    font-size: 0.76rem;
+    line-height: 1.55;
+    color: var(--theme-sub-text);
+  }
+
+  @container (min-width: 36rem) {
+    .bm-table-head {
+      display: grid;
+      grid-template-columns:
+        minmax(8.5rem, 1.15fr)
+        minmax(5.5rem, 0.72fr)
+        minmax(8.5rem, 1.15fr)
+        minmax(11rem, 1.85fr)
+        1rem;
+      gap: 0.6rem;
+      padding: 0.42rem 0.5rem;
+      background: var(--theme-code-block);
+      font-size: 0.72rem;
+      font-weight: 700;
+      color: var(--theme-text);
+    }
+
+    .bm-summary {
+      grid-template-columns:
+        minmax(8.5rem, 1.15fr)
+        minmax(5.5rem, 0.72fr)
+        minmax(8.5rem, 1.15fr)
+        minmax(11rem, 1.85fr)
+        1rem;
+      gap: 0.6rem;
+      padding: 0.58rem 0.5rem;
+    }
+
+    .bm-cell-name,
+    .bm-cell-turn,
+    .bm-cell-schema,
+    .bm-cell-challenge {
+      grid-column: auto;
+    }
+
+    .bm-cell-turn {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.16rem;
+    }
+
+    .bm-chevron {
+      grid-column: auto;
+      grid-row: auto;
+      justify-self: end;
+    }
+
+    .bm-dl {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .bm-dl-wide {
+      grid-column: 1 / -1;
+    }
+  }
+</style>

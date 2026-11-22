@@ -1,0 +1,330 @@
+---
+title: "Beyond SNIPS and ATIS: A Practical Guide to Slot-Filling Benchmarks in the LLM Era"
+pubDate: 2026-11-22 22:00:00
+description: "From saturated single-turn SLU to zero-shot multi-turn DST and function calling—curated deep dives, SOTA caveats, and an interactive map of slot-filling benchmarks."
+slug: slot-filling-benchmarks-beyond-snips-atis
+published: true
+---
+
+import SlotBenchmarkMatrix from "../../components/charts/SlotBenchmarkMatrix.astro";
+
+## TL;DR: Why Benchmark Choice Matters More in the LLM Era
+
+If you still judge slot-filling progress by full-shot scores on SNIPS and ATIS, the problem looks solved: fine-tuned BERT-class encoders passed **95%–97% Span F1** years ago. Yet the moment you drop an LLM or a source-trained extractor into a **zero-shot cross-domain schema**, a **noisy spoken transcript**, a **nested compositional request**, or a **20-turn multi-service dialogue**, accuracy collapses by 20 to 60 points.
+
+As we saw in [our companion study on SNIPS and ATIS](/notes/robust-yet-stubborn-slot-filling), even classic benchmarks still expose stubborn zero-shot failure modes—like annotation-convention conflicts on pronouns (`playlist_owner="my"`) and role-slot hijacking (`fromloc.city_name` collapsing into `city_name`). But evaluating modern LLMs solely on flat, single-turn English utterances leaves massive blind spots. Real systems have to handle unseen API descriptions, cross-lingual tokenization, ASR corruption, recursive schemas, and cumulative multi-turn state tracking.
+
+This guide maps the slot-filling benchmark ecosystem through a **Zero-Shot / Cross-Domain + LLM Evaluation** lens: what is saturated, what still breaks frontier models, which SOTA numbers are actually comparable, and how classical slot filling connects to modern LLM function calling.
+
+### Which Benchmark Should I Use?
+
+| Evaluation Goal | Start With | Why It Fits (and What Still Breaks) |
+| :--- | :--- | :--- |
+| **Zero-shot cross-domain span transfer (flat vs. role-qualified)** | **SNIPS (LODO)** + **SNIPS → ATIS** | Clean baselines for mixed seen/unseen slots and schema-hierarchy bias without noisy dialogues. |
+| **Zero-shot vertical IE & subjective span boundaries** | **MIT Restaurant & Movie** | Exposes dramatic LLM drops on descriptive, non-named-entity spans (`Plot`, `Amenity`, `Hours`). |
+| **Cross-lingual zero-shot transfer & script robustness** | **MASSIVE** (or **MultiATIS++**) | 51 culturally localized languages; reveals a 33+ point cliff from full-shot to English-only transfer. |
+| **Spoken SLU, ASR error propagation & Speech-LLMs** | **SLURP** (flat) / **STOP** (nested) | Real audio recordings plus `SLU-F1` to separate acoustic distortion from semantic slot errors. |
+| **Nested / recursive schemas & few-shot adaptation** | **TOPv2** (EN) / **MTOP** (6 langs) | Breaks the flat-BIO ceiling; strict Tree Exact Match penalizes bracket drift and dropped sub-intents. |
+| **Zero-shot schema-driven multi-turn API tracking** | **SGD** | Nearly 70% of test dialogues involve unseen services with natural-language schema descriptions. |
+| **Multi-domain human dialogue state tracking (DST)** | **MultiWOZ 2.4** (eval) + **2.2** (schema) | Natural human phrasing and cross-domain carry-over—use v2.4 for clean test scoring, never v2.0/2.1 alone. |
+| **Extreme few-shot & terse contextual disambiguation** | **Restaurant8k** | Real commercial turns like *"7"* that are unsolvable without `requestedSlots` context, with nested halving splits down to 32 examples. |
+| **Chinese multi-domain DST & discourse phenomena** | **CrossWOZ** / **RiSAWOZ** | Cross-domain constraint propagation (CrossWOZ) and explicit coreference/ellipsis labels across 12 domains (RiSAWOZ). |
+| **Modern LLM tool use, JSON schemas & abstention** | **FnCTOD** + **BFCL** / **ToolBench** | Tests typed/nested JSON arguments, irrelevant-tool abstention, and closed-loop multi-turn API execution. |
+
+*Table 1: Quick benchmark selector organized by evaluation objective.*
+
+---
+
+## 1. Interactive Benchmark Map
+
+Before diving into individual datasets, use the interactive matrix below to filter all curated deep-dive and broader-landscape benchmarks by turn structure, language coverage, core evaluation challenges, or keyword search. Expand any row to inspect SOTA provenance, strengths, limitations, and primary citations.
+
+<SlotBenchmarkMatrix />
+
+*Figure 1: Interactive map of single-turn SLU and multi-turn DST slot-filling benchmarks. Filter by scope, turn structure, language group, or challenge tags, and expand rows for SOTA snapshots and caveats.*
+
+---
+
+## 2. How to Read Slot-Filling SOTA Without Getting Misled
+
+Slot-filling leaderboards are notorious for apples-to-oranges comparisons. Before quoting any headline number, check three axes:
+
+1. **Supervision regime (Full-Shot vs. Cross-Domain Transfer vs. Pure Zero-Shot LLM).** A 97% F1 full-shot encoder on SNIPS says nothing about zero-shot transfer, where Leave-One-Domain-Out (LODO) models sit in the 34%–80% range depending on protocol. Worse, "zero-shot" means different things across benchmarks: on **SGD**, a model trained on the full SGD training set is already evaluated on ~69.6% unseen test services (schema-driven zero-shot), which is completely different from prompting an off-the-shelf LLM with zero SGD training data. On **MultiWOZ**, leave-one-domain-out zero-shot scores only the held-out domain's slots (where ChatGPT reaches **77.58%** avg per-domain JGA), whereas full multi-domain zero-shot scores all 30 slots jointly across multi-domain turns (where ChatGPT drops to **31.5%** JGA).
+2. **Scoring granularity (Span F1 vs. Tree EM vs. JGA vs. SLU-F1).** Single-turn benchmarks score exact entity spans via **Span F1** (micro or macro), where a single off-by-one preposition (`"at 7pm"` vs. `"7pm"`) counts as both a false positive and a false negative. Hierarchical benchmarks (**TOPv2 / MTOP**) require strict **Tree Exact Match (EM)** over the entire nested parse. Multi-turn DST uses **Joint Goal Accuracy (JGA)**—an all-or-nothing turn-level metric where one missed carry-over or one hallucinated slot zeros out the whole turn, routinely yielding 30%–60% JGA even when per-slot F1 exceeds 90%. Spoken benchmarks (**SLURP**) add **SLU-F1**, weighting span matches by word- and character-level edit distance to separate ASR typos from semantic labeling errors.
+3. **Version and split traps.** Never cite a "MultiWOZ SOTA" without the version number: re-annotating only the dev/test splits in **MultiWOZ 2.4** raises the exact same trained models by **+10 to +19 absolute JGA points** over MultiWOZ 2.1. Similarly, check whether **SNIPS** numbers are on the standard in-domain 700-utterance test split or 7-domain LODO; whether **ATIS** uses the 79-slot/120-tag or 83-slot/127-tag release; and never confuse **SMP2017 Task 1** (intent-only, 0 slots) with **SMP2019-ECDT** (124 slot types).
+
+---
+
+## 3. Curated Deep-Dive: Single-Turn Benchmarks
+
+Single-turn Spoken Language Understanding (SLU) isolates utterance-level slot extraction from dialogue history. These six benchmarks form the core evaluation backbone—from classic flat-schema anchors to multilingual, acoustic, nested, and vertical-IE stress tests.
+
+### 3.1 SNIPS — The Flat Multi-Domain Anchor
+
+- **Snapshot:** 14,484 English utterances (13,084 train / 700 dev / 700 test) | 7 domains (1-to-1 with 7 intents: `AddToPlaylist`, `BookRestaurant`, `GetWeather`, `PlayMusic`, `RateBook`, `SearchCreativeWork`, `SearchScreeningEvent`) | 39 distinct slot types (72 BIO tags) | Flat BIO single-turn | [Coucke et al. (2018)](#ref-coucke-2018).
+- **Zero-Shot / LLM Lens:** Full-shot SNIPS is completely saturated, but its **7-domain Leave-One-Domain-Out (LODO)** protocol ([Liu et al., 2020](#ref-liu-2020)) remains the standard laboratory for zero-shot cross-domain transfer because flat slot names partially overlap across domains, mixing source-seen and unseen target slots. In practice, SNIPS exposes an **annotation-convention identifiability gap**: extractive copying forces dataset-specific rules on everyday pronouns and deictics (`playlist_owner="my"`, `object_select="this"`, `current_location="here"`). As analyzed in [our companion study](/notes/robust-yet-stubborn-slot-filling), source-tuned extractors learn strong refusal priors against those words, while zero-shot LLMs cannot deduce dataset-specific boundary conventions from terse slot names alone.
+- **SOTA Snapshot (Strict Provenance):**
+  - *Full-shot (standard test, Span F1):* JointBERT ([Chen et al., 2019](#ref-chen-2019)) **97.08%**; Stack-Propagation ([Qin et al., 2019](#ref-qin-2019)) **94.20%** (saturation band ~97%–98%).
+  - *Zero-shot LODO (7 held-out domains, Span F1):* Coach+TR ([Liu et al., 2020](#ref-liu-2020)) **34.09%** on unseen slots / **51.93%** on seen slots; GZPL ([Li et al., 2023](#ref-li-2023)) **55.76%–61.07%** avg F1; SynAug ([Li et al., 2025](#ref-li-2025-synaug)) **68.54%** avg F1; [our advisor-guided setup](/notes/robust-yet-stubborn-slot-filling) reaches **69.24%** (frozen advisor `DeepSeek-V4-Flash`) and **79.69%** (source-tuned `Qwen3-8B` + advisor).
+  - *Zero-shot LLM prompting (in-domain test, not LODO):* Vanilla single-stage ChatGPT lands around **~55.7%–58.2%** Slot F1 ([Pan et al., 2023](#ref-pan-2023); [Zhu et al., 2024](#ref-zhu-2024)), whereas multi-stage QA prompting (`GPT-SLU`, [Zhu et al., 2024](#ref-zhu-2024)) lifts in-domain test F1 to **90.03%** (`text-davinci-003`).
+- **Pros:** Clean, balanced LODO protocol; ubiquitous baseline comparability across transfer papers.
+- **Cons:** Small vocabulary, crowdsourced templated phrasing, saturated under full supervision, terse slot names without descriptions.
+- **Core Challenge:** Annotation-convention identifiability on pronouns, deictics, and implicit boundary rules under zero-shot transfer.
+
+### 3.2 ATIS — Role-Qualified Single-Domain Flight Queries
+
+- **Snapshot:** 5,871 English utterances (4,478 train / 500 dev / 893 test in the canonical [Goo et al., 2018](#ref-goo-2018) / [Tur et al., 2010](#ref-tur-2010) split) | 1 domain (Air Travel) | 21 intents (18–26 across preprocessing variants, heavily skewed toward `atis_flight`) | 79 unique slot types (120 BIO tags; up to 83 types / 127 tags in some releases) | Role-qualified dot-notation serialized as flat BIO | [Hemphill et al. (1990)](#ref-hemphill-1990).
+- **Zero-Shot / LLM Lens:** Unlike SNIPS's flat slots, ATIS encodes fine-grained semantic roles via dot-notation (`fromloc.city_name`, `toloc.city_name`, `depart_time.time_relative`) alongside generic base slots (`city_name`). That structure makes **SNIPS → ATIS** (100% unseen slot names) a sharp diagnostic for **schema-hierarchy bias**: models fine-tuned on flat schemas systematically hijack role-qualified spans into generic base slots (`city_name`), which accounted for 91.6% of lost entities in [our companion study](/notes/robust-yet-stubborn-slot-filling). Vanilla single-stage LLM prompting also struggles to select accurately among 79 closely related role slots without decomposition.
+- **SOTA Snapshot (Strict Provenance):**
+  - *Full-shot (standard test, Span F1):* JointBERT ([Chen et al., 2019](#ref-chen-2019)) **95.75%**; Stack-Propagation ([Qin et al., 2019](#ref-qin-2019)) **95.90%** (saturation band ~95.7%–96.5%+).
+  - *Zero-shot LLM prompting (in-domain test):* Vanilla single-stage ChatGPT ranges wildly from **15.71% to 58.24%** Slot F1 depending on prompt format ([Pan et al., 2023](#ref-pan-2023); [Zhu et al., 2024](#ref-zhu-2024)), while multi-stage QA decomposition (`GPT-SLU`, [Zhu et al., 2024](#ref-zhu-2024)) climbs to **97.71%** (`gpt-3.5-turbo`) / **98.00%** (`text-davinci-003`).
+  - *Cross-dataset zero-shot (SNIPS → ATIS, 100% unseen slots):* In [our companion study](/notes/robust-yet-stubborn-slot-filling), source-tuned `Qwen3-8B` + advisor drops to **66.91%** F1 (below the raw advisor's **77.60%**), recovering to **78.46%** with a deterministic Same-Family Span-Binding Gate.
+- **Pros:** Genuine 1990s wizard-of-Oz spoken query syntax; rigorous test of semantic role disambiguation (`fromloc` vs. `toloc` vs. `stoploc`).
+- **Cons:** Legacy single domain; extreme intent imbalance; minor slot/tag count discrepancies across community repos.
+- **Core Challenge:** Schema-hierarchy bias and role-slot collapse when transferring from flat schemas or prompting LLMs over dense slot taxonomies.
+
+### 3.3 MASSIVE — 51-Language Culturally Localized Scale
+
+- **Snapshot:** Over 1,000,000 parallel utterances across **51 typologically diverse languages** in v1.0 (52 in v1.1 with Catalan; 29 language genera) | 19,521 utterances per language (~11,514 train / ~2,039 dev / ~2,980 test + ~3,000 MMNLU-22 held-out) | 18 domains (scenarios), 60 intents, 55 slot types | Flat single-turn spans | [FitzGerald et al. (2023)](#ref-fitzgerald-2023).
+- **Zero-Shot / LLM Lens:** Built by human-localizing English SLURP utterances into native cultural entities (names, places, dates) rather than literal machine translation, MASSIVE is the premier testbed for **cross-lingual zero-shot slot transfer**. Even strong multilingual encoders suffer a **more than 33-point Slot F1 cliff** when trained only on `en-US` and tested zero-shot on non-English locales. Full 51-language zero-shot LLM Slot F1 runs remain sparse due to API cost and script-tokenization disparities, with multilingual LLM evaluations (such as MEGA/MEGAVERSE) showing that zero-shot LLMs handle high-resource intent classification reasonably well while still trailing fine-tuned encoders on strict token-level Slot F1 in low-resource and non-Latin scripts.
+- **SOTA Snapshot (Strict Provenance, locale-averaged Slot F1; [FitzGerald et al., 2023](#ref-fitzgerald-2023)):**
+  - *Full-shot multilingual (trained on all 51 languages):* XLM-R Base **83.6 ± 0.2%** (85.1% Intent Acc); mT5 Base encoder-only **82.2 ± 0.2%**; mT5 Base text-to-text **81.3 ± 0.2%**.
+  - *Zero-shot cross-lingual (trained on `en-US` only, averaged across non-English locales):* XLM-R Base drops to **50.3 ± 0.1%** (70.6% Intent Acc); mT5 Base drops to **44.8 ± 0.1%** (encoder-only) / **41.6 ± 0.1%** (text-to-text).
+- **Pros:** Unmatched 51-language parallel breadth across Latin, Cyrillic, Arabic, CJK, Devanagari, Amharic, Thai, and Khmer scripts; shares SLURP's 18-domain ontology.
+- **Cons:** Text-only for non-English languages; flat single-turn spans; underlying task distribution still mirrors Western voice assistants.
+- **Core Challenge:** Cross-lingual span boundary alignment under agglutinative morphology, whitespace-free scripts (CJK, Thai, Khmer), and uneven LLM tokenizer fertility.
+
+### 3.4 SLURP — Realistic Spoken Audio and Entity Diversity
+
+- **Snapshot:** 72,277 real English audio recordings (34,603 close-range headset + 37,674 far-range; ~58 hours across diverse native and non-native accents) covering 16,520 unique text utterances | 18 domains (scenarios), 46 actions (69 composite scenario+action intents; 60 aligned with MASSIVE), 55 slot/entity types | Single-turn spoken + text flat spans | [Bastianelli et al. (2020)](#ref-bastianelli-2020).
+- **Zero-Shot / LLM Lens:** SLURP bridges clean text NLU and real-world acoustic SLU with far richer lexical variety (person names, media titles, home-IoT commands) than SNIPS or ATIS. It introduces **SLU-F1**—weighting span matches by word- and character-level edit distance—so evaluators can diagnose whether a model failed semantically or merely absorbed an ASR typo on an out-of-vocabulary proper noun. Even with full supervision, real audio induces a **~14-point gap** between gold-transcript NLU (~84.5%) and classic cascaded ASR+NLU (~70.5%), making SLURP a critical benchmark for Speech-LLMs and zero-shot spoken slot discovery.
+- **SOTA Snapshot (Strict Provenance, SLU-F1):**
+  - *Full-shot gold-transcript text NLU oracle ([Bastianelli et al., 2020](#ref-bastianelli-2020)):* **~84.3%–84.8%**.
+  - *Full-shot cascaded ASR+NLU baseline ([Bastianelli et al., 2020](#ref-bastianelli-2020)):* **~70.2%–70.8%**.
+  - *Full-shot end-to-end spoken SLU (saturation band ~75%–79%):* ESPnet-SLU Conformer **71.40%** (86.30% Intent Acc); Branchformer ([Peng et al., 2022](#ref-peng-2022)) **77.7%**; SpeechBrain HuBERT-large **78.96%** (89.37% Intent Acc).
+  - *Zero-shot spoken SLU (5 held-out slot types):* ZS-Whisper-SLU (Interspeech 2024) **46.8%**; WHISMA (Whisper + Llama-3, IEEE SLT 2024) **59.4%** base, rising to **73.7%–78.0%** with Structured Chain-of-Thought (SCoT) / multi-round prompting.
+- **Pros:** Real close- and far-field audio; high lexical diversity; diagnostic `SLU-F1` metric.
+- **Cons:** English-only; single-turn; raw string-match F1 can harshly penalize phonetic OOV proper-noun spellings without `SLU-F1`.
+- **Core Challenge:** ASR error propagation, OOV entity distortion, and recovering unseen slot types directly from noisy speech without hallucination.
+
+### 3.5 TOPv2 & MTOP — Nested Compositional Schemas
+
+- **Snapshot:**
+  - **TOPv2** ([Chen et al., 2020](#ref-chen-2020)): ~180,000 English utterances | 8 domains (`Alarm`, `Event`, `Messaging`, `Music`, `Navigation`, `Reminder`, `Timer`, `Weather`), 80 intents, 82 slot types | Defines low-resource **25 SPIS** (Samples Per Intent and Slot) adaptation splits on `Reminder` and `Weather`.
+  - **MTOP** ([Li et al., 2021](#ref-li-2021)): ~100,000 utterances across **6 languages** (EN, ES, FR, DE, HI, TH) | 11 domains, 117 intents, 78 slot types (~70/10/20 train/dev/test per language).
+  - **Schema:** Single-turn **hierarchical nested parse trees** (`[IN:SET_REMINDER [SL:TODO [IN:SEND_MESSAGE ...]]]`) where slots recursively wrap sub-intents and sub-slots, scored strictly by **Tree Exact Match (EM)**.
+- **Zero-Shot / LLM Lens:** Flat BIO tagging fundamentally cannot express nested requests like *"Remind me to text Mom when I get to the airport."* TOPv2 and MTOP test **compositional structural fidelity** under low-resource domain adaptation (25 SPIS) and cross-lingual transfer. Even with seq2seq models or LLMs, deeply nested domains (`Reminder`) trail flatter domains (`Weather`) by **more than 7 points** in low-resource adaptation, because models drop inner intents, misplace closing brackets, or flatten recursive clauses.
+- **SOTA Snapshot (Strict Provenance, Tree Exact Match):**
+  - *TOPv2 full-shot (all 8 domains):* Seq2Seq BART / Span-Pointer / retrieval-augmented parsers saturate around **~87.0%–87.52%** EM.
+  - *TOPv2 low-resource adaptation (25 SPIS; [Chen et al., 2020](#ref-chen-2020)):* BART-CopyPtr + FT gets **68.0%** (`Reminder`) / **75.9%** (`Weather`); BART + Reptile (MAML) reaches **70.5%** (`Reminder`) / **77.7%** (`Weather`).
+  - *MTOP full-shot English:* **~85.0%–86.4%** EM (XLM-R / BART / mT5).
+  - *MTOP zero-shot cross-lingual (train EN → test 5 non-EN languages; [Li et al., 2021](#ref-li-2021)):* XLM-R averages **~67.2%** EM on flat/cross-lingual transfer, while decoupled compositional transfer on non-Latin scripts (Hindi, Thai) drops to roughly **35%–65%** of English accuracy without machine translation + slot projection.
+- **Pros:** Breaks the flat-BIO ceiling; clean SPIS few-shot adaptation protocol (TOPv2) and multilingual compositional transfer (MTOP).
+- **Cons:** Strict Tree EM is unforgiving to tiny bracket/boundary deviations; requires structured or seq2seq decoding; TOPv2 is English-only.
+- **Core Challenge:** Preserving recursive nesting, bracket balance, and cross-lingual tree alignment under low-resource or zero-shot transfer.
+
+### 3.6 MIT Restaurant & MIT Movie — Vertical-Domain Descriptive Spans
+
+- **Snapshot:**
+  - **MIT Restaurant** ([Liu et al., 2013a](#ref-liu-2013-icassp)): 7,660 train / 1,521 test English utterances | 1 domain | 8 slot types (`Amenity`, `Cuisine`, `Dish`, `Hours`, `Location`, `Price`, `Rating`, `Restaurant_Name`).
+  - **MIT Movie** ([Liu et al., 2013b](#ref-liu-2013-asru)): `eng` simple queries (9,775 train / 2,443 test, 12 slots including `Actor`, `Director`, `Genre`, `Plot`, `Title`, `Year`) and `trivia10k13` complex queries (7,816 train / 1,953 test, 12 slots including `Award`, `Opinion`, `Plot`, `Quote`, `Relationship`).
+  - **Schema:** Single-turn flat BIO entity/slot tagging only (**no intent labels**).
+- **Zero-Shot / LLM Lens:** Despite being over a decade old, MIT Restaurant and MIT Movie have had a major second life as **zero-shot open-IE stress tests**. Standard LLM pretraining aligns well with classical named entities (`Actor`, `Location`), but **collapses on non-NE descriptive clauses** (`Plot`, `Amenity`, `Hours`, `Price`, `Quote`, `Opinion`) where modifier and preposition boundaries are underspecified without explicit annotation guidelines—exactly why guideline-conditioned IE frameworks like GoLLIE ([Sainz et al., 2024](#ref-sainz-2024)) emerged.
+- **SOTA Snapshot (Strict Provenance, strict entity-level Span F1):**
+  - *Full-shot supervised:* Fine-tuned BERT / RoBERTa-large reach **~90%–95%+** F1 (`trivia10k13` is harder due to long descriptive spans).
+  - *Zero-shot LLM / open-IE models (reported in [Zaratiana et al., 2024](#ref-zaratiana-2024) [GLiNER] / [Zhou et al., 2024](#ref-zhou-2024) [UniversalNER]):*
+    - ChatGPT (`gpt-3.5`) zero-shot: **5.3%** (MIT Movie) / **32.8%** (MIT Restaurant).
+    - UniversalNER (`UniNER-7B`): **42.4%** (MIT Movie) / **31.7%** (MIT Restaurant).
+    - GLiNER-L: **57.2%** (MIT Movie) / **42.9%** (MIT Restaurant).
+    - Guideline-conditioned IE (`GoLLIE`, [Sainz et al., 2024](#ref-sainz-2024)) confirms that explicit annotation guidelines are essential for vertical zero-shot IE (~55.3% avg across zero-shot IE suites).
+- **Pros:** Lightweight, clean vertical-domain testbed; starkly exposes non-NE boundary ambiguity in zero-shot LLMs.
+- **Cons:** No intent labels; crowdsourced lowercase, unpunctuated search queries; subtle boundary subjectivity (`Plot` vs. `Genre`, `Amenity` vs. `Cuisine`).
+- **Core Challenge:** Non-named-entity descriptive spans whose exact boundaries cannot be guessed from bare slot names without annotation guidelines.
+
+---
+
+## 4. Bridging Single-Turn Slot Filling to Multi-Turn DST
+
+Moving from single-turn SLU to multi-turn **Dialogue State Tracking (DST)** does not simply make inputs longer—it changes four structural assumptions of the task:
+
+- **Local Span Tagging vs. Cumulative Belief State:** Single-turn SLU extracts entity spans from one isolated utterance (scored by token/span **F1**). Multi-turn DST maintains a *cumulative* dictionary of `domain-slot → value` constraints across the entire conversation, updating, overwriting, or carrying over values stated many turns earlier.
+- **Strict All-or-Nothing Scoring (JGA):** DST's headline metric—**Joint Goal Accuracy (JGA)**—counts a turn as correct *only* if every active domain-slot pair across the full dialogue history matches ground truth simultaneously. A single dropped carry-over or hallucinated slot zeros out the turn, routinely yielding 30%–60% JGA even when per-slot F1 is over 90%.
+- **Implicit Context, Coreference & Ellipsis:** Short replies like *"7"* or *"make it the same area"* cannot be labeled in isolation—they depend on what the system just asked (`requestedSlots`), which entity appeared three turns earlier (coreference), or omitted subjects (ellipsis).
+- **Schema Dynamics (Closed Ontology → Natural-Language APIs):** Early DST assumed a tiny closed value table; modern multi-turn benchmarks explicitly separate **categorical** (closed enum) from **non-categorical** (open extractive span) slots and attach natural-language schema descriptions so models can track unseen APIs zero-shot.
+
+---
+
+## 5. Curated Deep-Dive: Multi-Turn TOD / DST Benchmarks
+
+### 5.1 SGD (Schema-Guided Dialogue) — Zero-Shot Multi-API Tracking
+
+- **Snapshot:** 22,825 English dialogues (16,142 train / 2,482 dev / 4,201 test), **463,284 turns** (~20.3 avg turns/dialogue; 329,964 train / 48,726 dev / 84,594 test) | 20 domains (16 train / 16 dev / 18 test), **45 services/APIs** (26 train / 17 dev / 21 test), 214 unique training slots | Per-service frames splitting categorical vs. non-categorical span slots, with natural-language descriptions for every service, intent, and slot | [Rastogi et al. (2020)](#ref-rastogi-2020).
+- **Zero-Shot / LLM Lens:** SGD is the gold standard for **schema-driven zero-shot generalization**: unseen services/APIs appear in **~42% of dev dialogues** and **~69.6% of test dialogues**, including wholly unseen domains like *Messaging*, *Payment*, and *Train*, plus multiple competing APIs within the same domain. Note the crucial comparability boundary: a model "full-shot trained on SGD train" is *already* tested heavily on zero-shot API transfer—distinct from a pure zero-shot LLM that never trains on SGD. Because the test set holds 4,201 dialogues (~84.6k turns), [Hudeček & Dušek (2023)](#ref-hudecek-2023) explicitly note that API cost has kept full GPT-4/ChatGPT JGA benchmarks on SGD sparse.
+- **SOTA Snapshot (Strict Provenance, SGD test JGA):**
+  - *Original BERT baseline ([Rastogi et al., 2020](#ref-rastogi-2020)):* **25.4%** overall JGA (~20.0% on unseen services).
+  - *Schema-driven trained DST SOTA:* **D3ST-XXL (T5-11B)** ([Zhao et al., 2022](#ref-zhao-2022)) reaches **86.4%** overall JGA (**95.8%** seen services / **83.3%** unseen services).
+  - *Zero-shot LLM function-calling reformulation:* **FnCTOD** ([Li et al., 2024](#ref-li-2024-fnctod)) recasts schemas as typed function calls, delivering a **+5.6% average JGA** gain over prior zero-shot prompting baselines (**+14%** for GPT-4, **+4.8%** for GPT-3.5) across TOD/DST benchmarks including SGD and MultiWOZ.
+- **Pros:** Realistic multi-API overlap within the same domain; built-in ~70% unseen-service test split; clean categorical vs. non-categorical schema design.
+- **Cons:** Machine-to-machine (M2M) dialogue skeletons paraphrased by crowdworkers read more templated than organic human chats; huge test set makes frontier LLM API benchmarking costly.
+- **Core Challenge:** Disambiguating overlapping APIs, following natural-language schema descriptions faithfully instead of falling back to pretraining priors, and carrying state across multi-service switches.
+
+### 5.2 MultiWOZ (2.0 → 2.4 Evolution) — The Human Multi-Domain Workhorse
+
+- **Snapshot:** 10,438 English human-human Wizard-of-Oz dialogues (8,438 train / 1,000 dev / 1,000 test; ~3,406 single-domain, ~7,032 multi-domain spanning 2–5 domains), **over 115,400 turns** | 7 domains (`Restaurant`, `Hotel`, `Attraction`, `Taxi`, `Train`, plus `Hospital` and `Police` in train only, excluded from dev/test evaluation) | **30 active domain-slot pairs** in standard 5-domain evaluation (35 active / 61 total in v2.2 schema).
+- **Why Version Tracking Is Mandatory:**
+  - **2.0** ([Budzianowski et al., 2018](#ref-budzianowski-2018)): Foundational human-human corpus, but suffered severe annotation noise (~40% of turns had state errors, delayed markups, or uncanonicalized values).
+  - **2.1** ([Eric et al., 2020](#ref-eric-2020)): Re-annotated ~32% of state annotations across ~40% of turns, canonicalized values, and added user dialogue acts—yet substantial label noise remained.
+  - **2.2** ([Zang et al., 2020](#ref-zang-2020)): Fixed state errors in an additional ~17.3% of utterances over 2.1; redesigned the schema (61 total / 35 active slots) to split categorical slots (fewer than 50 values) from non-categorical extractive text spans, mirroring SGD.
+  - **2.3** ([Han et al., 2021](#ref-han-2021)): Cleaned dialogue acts alongside states and added explicit **coreference annotations** (e.g., *"the same area"*).
+  - **2.4** ([Ye et al., 2022](#ref-ye-2022)): Exhaustively re-annotated **validation and test sets only** (keeping train untouched to test noise-robust training against a clean testbed), revealing that v2.1 test noise had depressed JGA by **+10 to +19 absolute points**.
+- **SOTA Snapshot (Strict Provenance — exposing both the Version Trap and Protocol Trap):**
+  - *Full-shot trained DST (same models evaluated on v2.1 vs. clean v2.4 test):*
+    - **STAR** ([Ye et al., 2022](#ref-ye-2022)): **56.36%** (v2.1) → **73.62%** (v2.4).
+    - **D3ST-XXL (11B)** ([Zhao et al., 2022](#ref-zhao-2022)): **57.80%** (v2.1) / **58.70%** (v2.2) / **75.90%** (v2.4) *(with SDP-DST at 57.60% and Event-DST at 57.76% on v2.2)*.
+    - **LDST (LLaMA-7B, instruction-tuned)** ([Feng et al., 2023](#ref-feng-2023)): **60.65%** (v2.1) → **79.94%** (v2.4).
+  - *Few-shot in-context LLM:* **IC-DST (GPT-3)** ([Hu et al., 2022](#ref-hu-2022)): **50.65%** (v2.1) → **62.43%** (v2.4).
+  - *Pure zero-shot multi-domain LLM (all 5 domains / 30 slots jointly on v2.1 test):* **ChatGPT (GPT-3.5)** scores **31.5%** JGA ([Heck et al., 2023](#ref-heck-2023)); **FnCTOD (GPT-4)** reaches **~38.71%** JGA ([Li et al., 2024](#ref-li-2024-fnctod)).
+  - *Zero-shot Leave-One-Domain-Out (single-domain per-domain JGA avg on v2.0; [Feng et al., 2023](#ref-feng-2023)):* **T5DST** **35.20%**; **LDST (LLaMA-7B)** **75.03%**; **ChatGPT** **77.58%**.
+- **Pros:** Most studied multi-turn DST benchmark; organic human-human phrasing; unique version lineage for separating model error from label noise.
+- **Cons:** Legacy noise in v2.0–2.1; narrow Cambridge travel ontology (only 5 eval domains); high pretraining contamination risk for frontier LLMs.
+- **Core Challenge:** Cross-domain entity carry-over, coreference, and strict value canonicalization (`"dontcare"`, `"centre"` vs. `"center"`, time formatting) where semantically accurate LLMs still fail exact-match JGA.
+
+### 5.3 Restaurant8k (RESTAURANTS-8K) — Terse Context & Extreme Few-Shot
+
+- **Snapshot:** 11,929 real commercial English user utterances (8,198 train / 3,731 test) | 1 domain (restaurant booking), 5 slot types (`date`, `time`, `people`, `first_name`, `last_name`) | Official 8 nested few-shot halving splits (`train_1` = 4,099 down to `train_8` = 32; `1/64` = 128, `1/128` = 64) | Single-turn-in-dialogue-context extractive span slot filling paired with previous system **`requestedSlots`** | [Coope et al. (2020)](#ref-coope-2020).
+- **Zero-Shot / LLM Lens:** Restaurant8k sits cleanly between single-turn SLU and full DST. Real phone/chat bookings are full of cryptic one-word turns like *"7"*—which could be `time` or `people` depending solely on which slot the bot just requested (`requestedSlots`). Its nested halving splits make it the cleanest laboratory for measuring how steeply span extractors degrade under extreme data scarcity and how much conditioning on system-turn context buys back.
+- **SOTA Snapshot (Strict Provenance, Macro-averaged Span F1 on 3,731-utterance test set):**
+  - *Full-shot (100% = 8,198 train):* **Span-ConveRT** **96.0** vs. V-CNN-CRF **94.0** vs. Span-BERT **92.0** ([Coope et al., 2020](#ref-coope-2020)); **ConVEx** **96.0** ([Henderson & Vulić, 2021](#ref-henderson-2021)).
+  - *Extreme few-shot (`1/64` = 128 train / `1/128` = 64 train):* **ConVEx (Ensemble)** ([Henderson & Vulić, 2021](#ref-henderson-2021)) reaches **78.2** (`1/64`) / **73.5** (`1/128`) (single ConVEx: **76.0** / **71.7**); earlier baselines like Span-ConveRT drop sharply (~37–58 at `1/64`, ~26–41 at `1/128` depending on setup); QA-based slot labeling (**QASL**) explicitly conditioning on `requestedSlots` reaches **87.9** (vs. 81.0 without context) at `1/64` and **85.8** (vs. 81.7 without context) at `1/128` on ambiguous cases.
+- **Pros:** Real messy commercial conversations; isolates extreme few-shot span extraction and `requestedSlots` disambiguation cleanly.
+- **Cons:** Single vertical domain with 5 slots; not a full cumulative belief-state tracker; English-only.
+- **Core Challenge:** Ultra-short ambiguous utterances (*"4"*, *"Friday"*, *"Smith"*) plus colloquial time/date span boundary conventions (e.g., whether prepositions like *"at"* or *"for"* are included).
+
+### 5.4 CrossWOZ & RiSAWOZ — Chinese Multi-Domain DST
+
+Chinese task-oriented dialogue introduces character-level boundary variance, frequent pro-drop/zero-anaphora ellipsis, and long-tail POI matching. Two complementary multi-domain Wizard-of-Oz corpora anchor this space:
+
+**A. CrossWOZ** ([Zhu et al., 2020](#ref-zhu-2020))
+- **Snapshot:** 6,012 Simplified Chinese dialogues (5,012 train / 500 dev / 500 test), ~102,500 utterances (~16.9 avg turns/dialogue) | 5 Beijing travel domains (`Hotel`, `Restaurant`, `Attraction`, `Metro`, `Taxi`), 72 slots, 7,871 unique values | Integrated into ConvLab-2/3.
+- **Zero-Shot / LLM Lens:** Roughly **60%** of dialogues feature genuine **cross-domain goal dependencies**, where entity attributes chosen in Domain A constrain Domain B (e.g., booking a restaurant near a previously selected attraction, then calling a taxi between them).
+- **SOTA Snapshot (CrossWOZ test Joint State / Goal Accuracy):** Original **TRADE** baseline ([Zhu et al., 2020](#ref-zhu-2020)) scores **36.08%** overall (dropping from **71.67%** on single-subgoal dialogues to **25.65%** on complex cross-domain `CM+T` dialogues; RuleDST with oracle dialogue acts hits 71.33%). Stronger supervised models like **Mars-G** reach **59.8%** JGA, though scores remain sensitive to strict Chinese entity normalization and standardized zero-shot LLM leaderboards are still sparse.
+- **Pros / Cons / Challenge:** First large-scale Chinese WoZ benchmark with true inter-domain dependencies; limited to 5 travel domains with no v2.4-style test denoising; stresses cross-domain constraint propagation and exact POI matching.
+
+**B. RiSAWOZ** ([Quan et al., 2020](#ref-quan-2020))
+- **Snapshot:** 11,200 Simplified Chinese dialogues (10,000 train / 600 dev / 600 test), **more than 150,000 utterances** (~13–14 avg turns/dialogue; 134,580 train turns) | **12 domains** (`Attraction`, `Restaurant`, `Hotel`, `Flight`, `Train`, `Weather`, `Movie`, `TV`, `Computer`, `Car`, `Hospital`, `Courses`), ~159 informable + requestable slots (~65% single-domain / ~35% multi-domain).
+- **Zero-Shot / LLM Lens:** Expands Chinese DST far beyond travel into structured product/service ontologies (computer specs, car models, medical visits, courses) and provides explicit **coreference** and **ellipsis** resolution annotations—mirroring everyday spoken Chinese where speakers drop subjects and entities freely (e.g., *"价格便宜点的"* without repeating the target item).
+- **SOTA Snapshot (RiSAWOZ test JGA; [Quan et al., 2020](#ref-quan-2020)):** **TRADE** achieves **58.19%** overall (**65.35%** single-domain / **50.49%** multi-domain); **MLCSG** achieves **66.16%** overall (**73.04%** single-domain / **58.77%** multi-domain). Standardized zero-shot LLM JGA benchmarks remain an open gap.
+- **Pros / Cons / Challenge:** Broadest Chinese multi-domain coverage with explicit discourse labels; higher share of single-domain dialogues than MultiWOZ/CrossWOZ and lower international adoption; stresses pro-drop ellipsis and long-tail domain ontologies.
+
+---
+
+## 6. The Broader Landscape (Quick-Scan Overview)
+
+Beyond the ten core benchmarks above, ten additional datasets cover specialized slices—cross-lingual role slots, multi-intent coupling, spoken compositional parsing, Chinese smart-speaker SLU, historical DST anchors, bilingual KB-grounded tracking, and perturbation robustness.
+
+| Dataset | Year | Turn | Languages | Domains & Scale | Focus & Core Challenge | Citation |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **MultiATIS++** | 2020 | Single | 9 (EN, ES, DE, FR, PT, ZH, JA, HI, TR) | 1 domain; ~34k+ utts (~1.4k–5.8k/lang), 21–26 intents, ~99–140 role-qualified BIO labels | Human-translated ATIS; cross-lingual slot projection under word-order divergence | [Xu et al. (2020)](#ref-xu-2020) |
+| **MixSNIPS & MixATIS** | 2020 | Single | English | MixSNIPS: 7 domains, 44,173 utts (7 intents, 39 slots); MixATIS: 1 domain, 14,748 utts (18 intents, ~84–120 tags) | Synthetic conjunction of 1–3 queries; binding slots to the right co-occurring intent | [Qin et al. (2020)](#ref-qin-2020) |
+| **HWU64 (NLU-Eval-Data)** | 2019 | Single | English | 21 home-assistant domains; 25,716 utts (~11k–25.7k by split), 64 intents, 54 slot types | Precursor to SLURP/MASSIVE ontology; frequently misused as intent-only despite having 54 slot types | [Liu et al. (2019a)](#ref-liu-2019-hwu64) |
+| **STOP** | 2022 | Single (Spoken) | English | 8 domains (from TOPv2); 236,477 audio clips (218 hrs, 885 speakers), 80 intents, 82 slots | Largest spoken nested-tree corpus; end-to-end audio-to-compositional parsing under acoustic noise | [Tomasello et al. (2022)](#ref-tomasello-2022) |
+| **CAIS** | 2019 | Single | Chinese | Smart speaker (music, IoT, weather, etc.); 10,001 utts (7,995/994/1,012–1,024), 11 intents, 75 BIOES tags (~24 slot types) | Real Chinese voice commands; character-level segmentation ambiguity | [Liu et al. (2019b)](#ref-liu-2019-cais) |
+| **SMP-ECDT (2017 / 2019)** | 2017 / 2019 | Single | Chinese | 2017 Task 1: ~30 domains, 3,735 utts (31 intents, **0 slots**); 2019-ECDT: ~3,609 utts (24 intents, **124 slot types**) | Chinese chatbot SLU shared task; **pitfall**: only 2019 includes slot labels | [SMP-ECDT (2017/2019)](#ref-smp-ecdt) |
+| **DSTC2** | 2014 | Multi (Spoken) | English | 1 domain (Cambridge restaurants); ~3,324 dialogues (1,117 test), ~25k–27k turns, 3 informable + 8 requestable slots | Closed-ontology DST pioneer with ASR N-best lists; noisy hypotheses & mid-dialogue goal changes | [Henderson et al. (2014)](#ref-henderson-2014) |
+| **WOZ 2.0** | 2017 | Multi | English | 1 domain (Cambridge restaurants); 1,200 dialogues (600/200/400), ~9,600 turns, 3 informable slots | Text-only WoZ DST pioneer decoupling tracking from ASR noise; tiny closed ontology (now saturated) | [Wen et al. (2017)](#ref-wen-2017); [Mrkšić et al. (2017)](#ref-mrksic-2017) |
+| **BiToD** | 2021 | Multi | Bilingual (EN & ZH) | 5 domains (`Restaurants`, `Hotels`, `Attractions`, `Metro`, `Weather`); 7,232 dialogues (3,689 EN + 3,543 ZH; 5,787/542/902), 144,798 utts | M2M bilingual KB-grounded E2E TOD & DST; cross-lingual zero-shot transfer across shared KB schemas | [Lin et al. (2021)](#ref-lin-2021-bitod) |
+| **RADDLE** | 2021 | Multi | English | Multi-domain TOD suite (restaurant, movie, taxi, coffee, etc.) + diagnostic checklist | Few-shot adaptation & robustness stress-test: paraphrases, typos, ASR errors, unseen entities, OOD turns | [Peng et al. (2021)](#ref-peng-2021) |
+
+*Table 2: Broader landscape of specialized single-turn and multi-turn slot-filling benchmarks.*
+
+**Three quick takeaways from the wider map:**
+- **Watch for hidden schema mismatches:** **HWU64** actually contains 54 slot types even though many papers cite it only for intent classification, while **SMP-ECDT** flips across years—SMP2017 Task 1 has **zero slots**, whereas SMP2019-ECDT annotates **124 slot types**.
+- **Spoken & multi-intent complexity scale up classic stress tests:** **STOP** scales TOPv2's nested trees to 218 hours of speech, **MultiATIS++** projects ATIS's dot-notation role slots across 9 languages, and **MixSNIPS / MixATIS** test whether extractors can assign spans when 1–3 intents collide in a single utterance.
+- **Robustness and bilingual transfer remain under-evaluated in LLM papers:** **DSTC2** and **WOZ 2.0** are historical milestones (worth knowing for lineage, no longer sufficient as standalone SOTA targets), whereas **BiToD** and **RADDLE** target two areas modern LLM evaluations routinely skip: shared-KB bilingual DST and systematic robustness under typos, ASR errors, and unseen entities.
+
+> **Common Pitfall: Banking77 & CLINC150 Are Not Slot-Filling Benchmarks**
+>
+> Two widely cited NLU datasets regularly sneak into "slot-filling benchmark" lists despite containing **zero slot annotations**:
+> - **Banking77** ([Casanueva et al., 2020](#ref-casanueva-2020)): 13,083 English utterances (10,003 train / 3,080 test), 1 online-banking domain, **77 fine-grained intents**, **0 slots**.
+> - **CLINC150** ([Larson et al., 2019](#ref-larson-2019)): 23,700 English utterances, 10 domains, **150 in-scope intents + 1 out-of-scope (OOS) class**, **0 slots**.
+>
+> Both are valuable for sentence-level intent classification and OOS detection, but neither can evaluate span extraction, boundary fidelity, or schema-guided slot transfer.
+
+---
+
+## 7. From Slot Filling to LLM Function Calling
+
+In production LLM agents, classical slot filling (`intent + BIO spans`) and schema-guided DST (`service + slot-value state`) have converged into **Function Calling / Tool Use** and **Structured JSON Schema Extraction**. **FnCTOD** ([Li et al., 2024](#ref-li-2024-fnctod)) makes this lineage concrete: simply reformulating MultiWOZ and SGD dialogue schemas as typed function signatures boosts GPT-4 zero-shot DST JGA by **+14%** (and GPT-3.5 by **+4.8%**, **+5.6%** on average) over plain-text prompting.
+
+Two modern benchmarks anchor this next generation of evaluation:
+- **BFCL (Berkeley Function Calling Leaderboard)** ([Patil et al., 2025](#ref-patil-2025)): Over **2,000 test cases** spanning Python, Java, and JavaScript, covering single, multiple, and parallel tool calls, live user-contributed schemas, **irrelevance/abstention detection**, and **multi-turn stateful trajectories**—scored via **AST matching and execution state verification** instead of brittle string match.
+- **ToolBench** ([Qin et al., 2024](#ref-qin-2024)): **16,464 real-world REST APIs** across **49 RapidAPI categories**, testing single-tool (I1), intra-collection (I2), and cross-collection multi-step chaining (I3) alongside out-of-domain APIs.
+
+### What Evolved vs. What Stayed Stubbornly Hard
+
+| Dimension | What Evolved in Function Calling | What Remained Stubbornly Hard (Echoing Classical Slot Filling) |
+| :--- | :--- | :--- |
+| **Output Structure** | Flat BIO tags and flat `domain-slot` dicts evolved into **typed, nested JSON arguments** (booleans, enums, arrays, nested objects). | **Schema adherence & format fidelity:** LLMs still drift from strict parameter types, enum spellings, date/time conventions, and required-vs-optional fields—the direct descendant of SNIPS/MultiWOZ boundary and canonicalization failures. |
+| **Schema Scale** | Fixed single-domain intent classifiers evolved into **dynamic tool selection and parallel orchestration** over hundreds or thousands of APIs. | **Hallucinated arguments & failure to abstain:** Filling unmentioned optional parameters with plausible defaults or invoking irrelevant tools (exposed by BFCL's `irrelevance` and `multi_turn_miss_param` splits)—the modern cousin of over-triggering slots in DST. |
+| **Interaction Loop** | Passive turn-by-turn state annotation evolved into **closed-loop execution** (calling an API, inspecting errors/results, repairing arguments). | **Cross-turn state drift:** Over long multi-turn trajectories, LLMs still drop constraints stated five turns earlier or fail to overwrite stale parameters when a user changes their mind. |
+
+*Table 3: Continuity between classical slot filling / DST and modern LLM function calling.*
+
+The practical takeaway is clear: **the container changed from BIO tags to JSON schemas, but the core failure modes did not vanish.** Picking the right benchmark today means matching your evaluation suite to the exact failure mode you need to expose—whether that is zero-shot convention ambiguity (SNIPS / MIT), role-slot hierarchy (ATIS), cross-lingual or acoustic robustness (MASSIVE / SLURP), compositional nesting (TOPv2 / MTOP), cumulative multi-API tracking (SGD / MultiWOZ 2.4), or executable tool-call abstention (BFCL / ToolBench).
+
+---
+
+## References
+
+- <a id="ref-bastianelli-2020"></a>**Bastianelli et al. (2020).** Emanuele Bastianelli, Andrea Vanzo, Paweł Świętojański, & Verena Rieser. *SLURP: A Spoken Language Understanding Resource Package*. *EMNLP 2020*.
+- <a id="ref-budzianowski-2018"></a>**Budzianowski et al. (2018).** Paweł Budzianowski et al. *MultiWOZ — A Large-Scale Multi-Domain Wizard-of-Oz Dataset for Task-Oriented Dialogue Modelling*. *EMNLP 2018*.
+- <a id="ref-casanueva-2020"></a>**Casanueva et al. (2020).** Iñigo Casanueva, Tadas Temčinas, Daniela Gerz, Matthew Henderson, & Ivan Vulić. *Efficient Intent Detection with Dual Sentence Encoders* (Banking77). *NLP4ConvAI Workshop @ ACL 2020*.
+- <a id="ref-chen-2019"></a>**Chen et al. (2019).** Qian Chen et al. *BERT for Joint Intent Classification and Slot Filling* (JointBERT). *2019*.
+- <a id="ref-chen-2020"></a>**Chen et al. (2020).** Xilun Chen, Asish Ghoshal, Yashar Mehdad, Luke Zettlemoyer, & Sonal Gupta. *Low-Resource Domain Adaptation for Compositional Task-Oriented Semantic Parsing* (TOPv2). *EMNLP 2020*.
+- <a id="ref-coope-2020"></a>**Coope et al. (2020).** Samuel Coope et al. *Span-ConveRT: Few-shot Span Extraction for Dialog with Pretrained Conversational Representations* (RESTAURANTS-8K). *ACL 2020*.
+- <a id="ref-coucke-2018"></a>**Coucke et al. (2018).** Alice Coucke, Alaa Saade, Adrien Ball, Théodore Bluche, Alexandre Caulier, David Leroy, Clément Doumouro, Thibault Gisselbrecht, Francesco Caltagirone, Thibaut Lavril, Maël Primet, & Joseph Dureau. [Snips Voice Platform: an embedded Spoken Language Understanding system for private-by-design voice interfaces](https://arxiv.org/abs/1805.10190). *arXiv:1805.10190*.
+- <a id="ref-eric-2020"></a>**Eric et al. (2020).** Mihail Eric et al. *MultiWOZ 2.1: A Consolidated Multi-Domain Dialogue Dataset with State Corrections and State Tracking Baselines*. *LREC 2020*.
+- <a id="ref-feng-2023"></a>**Feng et al. (2023).** Yujie Feng et al. *Towards LLM-driven Dialogue State Tracking* (LDST). *EMNLP 2023*.
+- <a id="ref-fitzgerald-2023"></a>**FitzGerald et al. (2023).** Jack FitzGerald et al. [MASSIVE: A 1M-Example Multilingual Natural Language Understanding Dataset with 51 Typologically-Diverse Languages](https://arxiv.org/abs/2204.08582). *ACL 2023*.
+- <a id="ref-goo-2018"></a>**Goo et al. (2018).** Chih-Wen Goo et al. *Slot-Gated Modeling for Joint Slot Filling and Intent Prediction* (canonical ATIS split). *NAACL 2018*.
+- <a id="ref-han-2021"></a>**Han et al. (2021).** Ting Han et al. *MultiWOZ 2.3: A Multi-Domain Task-Oriented Dialogue Dataset Enhanced with Annotation Corrections and Co-Reference Annotation*. *NLPCC 2021*.
+- <a id="ref-heck-2023"></a>**Heck et al. (2023).** Michael Heck et al. *ChatGPT for Zero-Shot Dialogue State Tracking: A Solution or an Opportunity?* *SIGDIAL 2023*.
+- <a id="ref-hemphill-1990"></a>**Hemphill et al. (1990).** Charles T. Hemphill, John J. Godfrey, & George R. Doddington. [The ATIS Spoken Language Systems Pilot Corpus](https://aclanthology.org/H90-1021/). *Speech and Natural Language Workshop 1990*.
+- <a id="ref-henderson-2014"></a>**Henderson et al. (2014).** Matthew Henderson et al. *The Second Dialog State Tracking Challenge* (DSTC2). *SIGDIAL 2014*.
+- <a id="ref-henderson-2021"></a>**Henderson & Vulić (2021).** Matthew Henderson & Ivan Vulić. *ConVEx: Data-Efficient and Few-Shot Slot Labeling*. *NAACL 2021*.
+- <a id="ref-hu-2022"></a>**Hu et al. (2022).** Yushi Hu, Chia-Hsuan Lee, Tianbao Xie, Tao Yu, Noah A. Smith, & Mari Ostendorf. *In-Context Learning for Few-Shot Dialogue State Tracking* (IC-DST). *Findings of EMNLP 2022*.
+- <a id="ref-hudecek-2023"></a>**Hudeček & Dušek (2023).** Vojtěch Hudeček & Ondřej Dušek. *Are Large Language Models All You Need for Task-Oriented Dialogue?* *SIGDIAL 2023*.
+- <a id="ref-larson-2019"></a>**Larson et al. (2019).** Stefan Larson et al. *An Evaluation Dataset for Intent Classification and Out-of-Scope Prediction* (CLINC150). *EMNLP-IJCNLP 2019*.
+- <a id="ref-li-2021"></a>**Li et al. (2021).** Haoran Li et al. *MTOP: A Comprehensive Multilingual Task-Oriented Semantic Parsing Benchmark*. *EACL 2021*.
+- <a id="ref-li-2023"></a>**Li et al. (2023).** Xuefeng Li, Liwen Wang, Guanting Dong, Keqing He, Jinzheng Zhao, Hao Lei, Jiachi Liu, & Weiran Xu. [Generative Zero-Shot Prompt Learning for Cross-Domain Slot Filling with Inverse Prompting](https://arxiv.org/abs/2307.02830). *Findings of ACL 2023*.
+- <a id="ref-li-2024-fnctod"></a>**Li et al. (2024).** Zekun Li, Zhiyu Zoey Chen, Mike Ross, Patrick Huber, Seungwhan Moon, Zhaojiang Lin, Luna Dong, Adithya Sagar, Xifeng Yan, & Paul A. Crook. *Large Language Models as Zero-shot Dialogue State Tracker through Function Calling* (FnCTOD). *ACL 2024*.
+- <a id="ref-li-2025-synaug"></a>**Li et al. (2025).** Weizhen Li, Junbao Huang, Peijie Huang, Yuhong Xu, & Jiekun Fan. [Synergistic Augmentation: Enhancing Cross-Domain Zero-Shot Slot Filling with Small Model-Assisted Large Language Models](https://aclanthology.org/2025.findings-acl.1097/). *Findings of ACL 2025*.
+- <a id="ref-lin-2021-bitod"></a>**Lin et al. (2021).** Zhaojiang Lin et al. *BiToD: A Bilingual Multi-Domain Dataset for Task-Oriented Dialogue Modeling*. *NeurIPS 2021 (Datasets & Benchmarks)*.
+- <a id="ref-liu-2013-icassp"></a>**Liu et al. (2013a).** Jingjing Liu, Panupong Pasupat, Scott Cyphers, & James Glass. *ASGARD: A Portable Architecture for Multilingual Dialogue Systems* (MIT Restaurant). *IEEE ICASSP 2013*.
+- <a id="ref-liu-2013-asru"></a>**Liu et al. (2013b).** Jingjing Liu, Panupong Pasupat, Yining Wang, Scott Cyphers, & James Glass. *Query Understanding Enhanced by Hierarchical Parsing Structures* (MIT Movie). *IEEE ASRU 2013*.
+- <a id="ref-liu-2019-hwu64"></a>**Liu et al. (2019a).** Xingkun Liu, Arash Eshghi, Pawel Swietojanski, & Verena Rieser. *Benchmarking Natural Language Understanding Services for Building Conversational Agents* (HWU64 / NLU-Eval-Data). *IWSDS 2019*.
+- <a id="ref-liu-2019-cais"></a>**Liu et al. (2019b).** Yijin Liu et al. *CM-Net: A Novel Collaborative Memory Network for Spoken Language Understanding* (CAIS). *EMNLP-IJCNLP 2019*.
+- <a id="ref-liu-2020"></a>**Liu et al. (2020).** Zihan Liu, Genta Indra Winata, Peng Xu, & Pascale Fung. [Coach: A Coarse-to-Fine Approach for Cross-domain Slot Filling](https://aclanthology.org/2020.acl-main.3/). *ACL 2020*, pp. 19–25.
+- <a id="ref-mrksic-2017"></a>**Mrkšić et al. (2017).** Nikola Mrkšić et al. *Neural Belief Tracker: Data-Driven Dialogue State Tracking* (WOZ 2.0 evaluation). *ACL 2017*.
+- <a id="ref-pan-2023"></a>**Pan et al. (2023).** Wenbo Pan, Qiguang Chen, Xiao Xu, Wanxiang Che, & Libo Qin. [A Preliminary Evaluation of ChatGPT for Zero-shot Dialogue Understanding](https://arxiv.org/abs/2304.04256). *arXiv:2304.04256*.
+- <a id="ref-patil-2025"></a>**Patil et al. (2025).** Shishir G. Patil et al. *The Berkeley Function Calling Leaderboard (BFCL)*. *ICML 2025* (released 2024).
+- <a id="ref-peng-2021"></a>**Peng et al. (2021).** Baolin Peng et al. *RADDLE: An Evaluation Benchmark and Analysis Platform for Robust Task-oriented Dialog Systems*. *ACL-IJCNLP 2021*.
+- <a id="ref-peng-2022"></a>**Peng et al. (2022).** Yifan Peng et al. *Branchformer: Parallel MLP-Attention Architectures to Capture Local and Global Context for Speech Recognition and Understanding*. *ICML 2022*.
+- <a id="ref-qin-2019"></a>**Qin et al. (2019).** Libo Qin et al. *A Stack-Propagation Framework with Token-Level Intent Detection for Spoken Language Understanding*. *EMNLP 2019*.
+- <a id="ref-qin-2020"></a>**Qin et al. (2020).** Libo Qin et al. *AGIF: An Adaptive Graph-Interactive Framework for Joint Multiple Intent Detection and Slot Filling* (MixSNIPS & MixATIS). *Findings of EMNLP 2020*.
+- <a id="ref-qin-2024"></a>**Qin et al. (2024).** Yujia Qin et al. *ToolLLM: Facilitating Large Language Models to Master 16000+ Real-World APIs* (ToolBench). *ICLR 2024*.
+- <a id="ref-quan-2020"></a>**Quan et al. (2020).** Jun Quan et al. *RiSAWOZ: A Large-Scale Multi-Domain Wizard-of-Oz Dataset with Rich Semantic Annotations for Task-Oriented Dialogue Modeling*. *EMNLP 2020*.
+- <a id="ref-rastogi-2020"></a>**Rastogi et al. (2020).** Abhinav Rastogi, Xiaoxue Zang, Srinivas Sunkara, Raghav Gupta, & Pranav Khaitan. [Towards Scalable Multi-Domain Conversational Agents: The Schema-Guided Dialogue Dataset](https://arxiv.org/abs/1909.05855). *AAAI 2020*.
+- <a id="ref-sainz-2024"></a>**Sainz et al. (2024).** Oscar Sainz, Iker García-Ferrero, Rodrigo Agerri, Oier Lopez de Lacalle, German Rigau, & Eneko Agirre. [GoLLIE: Annotation Guidelines improve Zero-Shot Information-Extraction](https://arxiv.org/abs/2310.03668). *ICLR 2024*.
+- <a id="ref-smp-ecdt"></a>**SMP-ECDT Organizing Committees (2017 / 2019).** *SMP2017 / SMP2019 Evaluation of Chinese Human-Computer Dialogue Technology (ECDT)*. *CIPS-SMP / HIT / iFLYTEK*.
+- <a id="ref-tomasello-2022"></a>**Tomasello et al. (2022).** Paden Tomasello et al. *STOP: A Dataset for Spoken Task Oriented Semantic Parsing*. *IEEE SLT 2022*.
+- <a id="ref-tur-2010"></a>**Tur et al. (2010).** Gökhan Tür, Dilek Hakkani-Tür, & Larry Heck. *What is Left to be Understood in ATIS?* *IEEE SLT 2010*.
+- <a id="ref-wen-2017"></a>**Wen et al. (2017).** Tsung-Hsien Wen et al. *A Network-based End-to-End Trainable Task-oriented Dialogue System* (WOZ 2.0). *EACL 2017*.
+- <a id="ref-xu-2020"></a>**Xu et al. (2020).** Weijia Xu, Batool Haider, & Saab Mansour. *End-to-End Slot Alignment and Recognition for Cross-Lingual NLU* (MultiATIS++). *EMNLP 2020*.
+- <a id="ref-ye-2022"></a>**Ye et al. (2022).** Fanghua Ye et al. *MultiWOZ 2.4: A Multi-Domain Task-Oriented Dialogue Dataset with Essential Annotation Corrections to Improve State Tracking Evaluation*. *SIGDIAL 2022*.
+- <a id="ref-zang-2020"></a>**Zang et al. (2020).** Xiaoxue Zang et al. *MultiWOZ 2.2: A Dialogue Dataset with Additional Annotation Corrections and State Tracking Baselines*. *NLP4ConvAI Workshop @ ACL 2020*.
+- <a id="ref-zaratiana-2024"></a>**Zaratiana et al. (2024).** Urchade Zaratiana et al. *GLiNER: Generalist Model for Named Entity Recognition using Bidirectional Transformer*. *NAACL 2024*.
+- <a id="ref-zhao-2022"></a>**Zhao et al. (2022).** Jeffrey Zhao, Raghav Gupta, Yuan Cao, Dian Yu, Mingqiu Wang, Harrison Lee, Abhinav Rastogi, Izhak Shafran, & Yonghui Wu. [Description-Driven Task-Oriented Dialog Modeling](https://arxiv.org/abs/2201.08904). *arXiv:2201.08904*.
+- <a id="ref-zhou-2024"></a>**Zhou et al. (2024).** Wenxuan Zhou et al. *UniversalNER: Targeted Distillation from Large Language Models for Open Named Entity Recognition*. *ICLR 2024*.
+- <a id="ref-zhu-2020"></a>**Zhu et al. (2020).** Qi Zhu et al. *CrossWOZ: A Large-Scale Chinese Cross-Domain Task-Oriented Dialogue Dataset*. *TACL 2020*.
+- <a id="ref-zhu-2024"></a>**Zhu et al. (2024).** Zhihong Zhu, Xuxin Cheng, Hao An, Zhichang Wang, Dongsheng Chen, & Zhiqi Huang. [Zero-Shot Spoken Language Understanding via Large Language Models: A Preliminary Study](https://aclanthology.org/2024.lrec-main.1554/). *LREC-COLING 2024*.
